@@ -14,11 +14,21 @@
     "types": ["node"]
   },
   "include": [
-    "src/art-effects.ts",
     "src/airflow.ts",
+    "src/art-effects.ts",
+    "src/art-ink.ts",
+    "src/art-passes.ts",
+    "src/art-stability.ts",
     "src/light-schedule.ts",
+    "src/pixel-look.ts",
     "src/reflection-plane.ts",
-    "src/swept-disc.ts"
+    "src/ripple-field.ts",
+    "src/sample-coverage.ts",
+    "src/scene-optics.ts",
+    "src/splat-effects.ts",
+    "src/surface-look.ts",
+    "src/swept-disc.ts",
+    "src/volume-field.ts"
   ],
   "exclude": ["node_modules", "src/**/*.generated.js"]
 }

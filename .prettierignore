@@ -2,7 +2,6 @@ dist/
 cli/ink-studio.generated.js
 src/**/*.generated.js
 catalog.json
-src/pixel-look.js
 tests/
 lab/assets/
 node_modules/

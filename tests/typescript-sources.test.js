@@ -4,7 +4,23 @@ const test = require('node:test');
 const vm = require('node:vm');
 const library = require('..');
 
-const migrated = ['art-effects', 'airflow', 'light-schedule', 'reflection-plane', 'swept-disc'];
+const migrated = [
+  'airflow',
+  'art-effects',
+  'art-ink',
+  'art-passes',
+  'art-stability',
+  'light-schedule',
+  'pixel-look',
+  'reflection-plane',
+  'ripple-field',
+  'sample-coverage',
+  'scene-optics',
+  'splat-effects',
+  'surface-look',
+  'swept-disc',
+  'volume-field'
+];
 const root = path.join(__dirname, '..');
 const relative = file => path.relative(root, file).split(path.sep).join('/');
 
@@ -23,7 +39,9 @@ test('browser bundles use generated global scripts instead of CommonJS loaders',
   const context = vm.createContext({});
   vm.runInContext(library.bundle(), context);
   assert.equal(vm.runInContext(`[
-    ArtEffects, Airflow, LightSchedule, ReflectionPlane, SweptDisc
+    Airflow, ArtEffects, ArtInk, ArtPasses, ArtStability, LightSchedule, PixelLook,
+    ReflectionPlane, RippleField, SampleCoverage, SceneOptics, SplatEffects,
+    SurfaceLook, SweptDisc, VolumeField
   ].every(value => value && typeof value === 'object')`, context), true);
 });
 

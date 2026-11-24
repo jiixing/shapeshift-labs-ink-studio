@@ -3,7 +3,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { transform } = require('esbuild');
 
-const names = ['art-effects', 'airflow', 'light-schedule', 'reflection-plane', 'swept-disc'];
+const names = [
+  'airflow',
+  'art-effects',
+  'art-ink',
+  'art-passes',
+  'art-stability',
+  'light-schedule',
+  'pixel-look',
+  'reflection-plane',
+  'ripple-field',
+  'sample-coverage',
+  'scene-optics',
+  'splat-effects',
+  'surface-look',
+  'swept-disc',
+  'volume-field'
+];
 const root = path.join(__dirname, '..');
 const banner = name => '// Generated from src/' + name + '.ts by npm run build:src. Do not edit.';
 
