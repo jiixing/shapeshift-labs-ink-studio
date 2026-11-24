@@ -1,0 +1,46 @@
+# Render examples
+
+Run these commands from the repository root after editing the scene files.
+
+## 1. Airflow scene
+
+Render a colored frame at 1.4 seconds:
+
+```sh
+node cli/ink-studio.js render examples/airflow.js --t 1.4 --colored
+```
+
+Output: `studio/out/airflow.png` (900×620).
+
+
+animation
+
+node cli/ink-studio.js shimmer examples/airflow.js --mode still --t 0 --frames 30 --step 0.1 --delay 10 --w 600 --h 420 --colored --out studio/out/airflow.gif 
+
+## 2. Art-effects scene with automatic pixel sizing
+
+```sh
+node cli/ink-studio.js render examples/art-effects.js --t 1.2 --colored --out studio/out/art-effects.png
+```
+
+This command currently fails with `PNG pixel count does not match its shape`. The scene does not set `detail` in `B.finish(...)`, so the renderer cannot calculate an automatic art-pixel size. Add a finite `detail` value to the scene to use this form.
+
+## 3. Art-effects scene with an explicit pixel size
+
+Use this working command until the scene supplies `detail`:
+
+```sh
+node cli/ink-studio.js render examples/art-effects.js --t 1.2 --colored --px 5 --out studio/out/art-effects.png
+```
+
+`--px 5` renders a 180×124 native art grid and upscales it to a 900×620 PNG. Adjust `--px` after scene tweaks if you want a different pixel size.
+
+## 4. Mountain lake reflection
+
+Render the blue lake, copper mountains, and saturated grass field:
+
+```sh
+node cli/ink-studio.js render examples/lake-reflection.js --t 0.94 --colored --out studio/out/lake-reflection.png
+```
+
+Output: `studio/out/lake-reflection.png` (900×621).
