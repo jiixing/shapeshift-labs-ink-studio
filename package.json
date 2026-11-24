@@ -8,13 +8,22 @@
     "ink-studio": "cli/ink-studio.js"
   },
   "scripts": {
+    "pretest": "npm run build:webgl",
     "test": "node --test tests/*.test.js && node cli/ink-studio.js selftest",
+    "typecheck": "tsc --noEmit",
+    "build:webgl": "npm run typecheck && node scripts/build-webgl.js",
     "lint": "node scripts/check.js",
-    "format": "prettier --write \"src/**/*.js\" \"cli/*.js\" \"demos/*.js\" \"lab/*.js\" index.js \"scripts/*.js\""
+    "format": "prettier --write \"src/**/*.{js,ts}\" \"cli/*.js\" \"demos/*.js\" \"lab/*.js\" index.js webgl.ts webgl.d.mts \"scripts/*.{js,ts}\""
   },
   "license": "MIT",
   "engines": {
     "node": ">=18"
   },
-  "repository": "github:siliconjungle/shapeshift-labs-ink-studio"
+  "repository": "github:siliconjungle/shapeshift-labs-ink-studio",
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.10.1",
+    "typescript": "^7.0.2"
+  }
 }

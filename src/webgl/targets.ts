@@ -1,10 +1,36 @@
-export function createTargets(gl, resources) {
-  const textureUnit = (unit, texture) => {
+import type { WebGLResources } from './resources';
+
+export interface RenderTarget {
+  readonly framebuffer: WebGLFramebuffer;
+  readonly textures: readonly WebGLTexture[];
+  readonly width: number;
+  readonly height: number;
+  resize(width: number, height: number): void;
+}
+
+export interface DataTable {
+  bind(): void;
+  upload(values: Float32Array, count?: number, dirtyRows?: readonly number[]): void;
+}
+
+export interface TargetOptions {
+  integer?: boolean;
+  depth?: boolean;
+}
+
+export interface WebGLTargets {
+  target(colors?: number, options?: TargetOptions): RenderTarget;
+  table(width: number, unit: number, maxSize: number): DataTable;
+  textureUnit(unit: number, texture: WebGLTexture | null): void;
+}
+
+export function createTargets(gl: WebGL2RenderingContext, resources: WebGLResources): WebGLTargets {
+  const textureUnit = (unit: number, texture: WebGLTexture | null): void => {
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
   };
 
-  function target(colors = 1, { integer = false, depth = false } = {}) {
+  function target(colors = 1, { integer = false, depth = false }: TargetOptions = {}): RenderTarget {
     const framebuffer = resources.allocate('Framebuffer');
     const textures = Array.from({ length: colors }, () => resources.texture());
     const depthBuffer = depth ? resources.allocate('Renderbuffer') : null;
@@ -20,12 +46,18 @@ export function createTargets(gl, resources) {
       gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthBuffer);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    let w = 0, h = 0;
+    let w = 0;
+    let h = 0;
     return {
-      framebuffer, textures,
-      get width() { return w; },
-      get height() { return h; },
-      resize(width, height) {
+      framebuffer,
+      textures,
+      get width() {
+        return w;
+      },
+      get height() {
+        return h;
+      },
+      resize(width: number, height: number) {
         if (w === width && h === height) return;
         for (const texture of textures) {
           textureUnit(0, texture);
@@ -47,12 +79,12 @@ export function createTargets(gl, resources) {
 
   // The shader addresses an entire sample in one row. An incomplete final row
   // is zero-padded without copying the complete scene on every upload.
-  function table(width, unit, maxSize) {
+  function table(width: number, unit: number, maxSize: number): DataTable {
     const texture = resources.texture();
     const stride = width * 4;
     const tail = new Float32Array(stride);
     let rows = 0;
-    function upload(values, count = values.length, dirtyRows) {
+    function upload(values: Float32Array, count = values.length, dirtyRows?: readonly number[]): void {
       const next = Math.max(1, Math.ceil(count / stride));
       if (next > maxSize) throw new RangeError('Ink Studio data exceeds the WebGL texture size limit');
       textureUnit(unit, texture);

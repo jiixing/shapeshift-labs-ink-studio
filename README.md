@@ -744,7 +744,9 @@ Then `ink-studio scenes`, `render`, `snap` and other commands operate on that co
 
 ## Optional WebGL renderer
 
-Import `@shapeshift-labs/ink-studio/webgl.mjs` in a browser build, or serve `webgl.mjs` and its relative `src/webgl/` modules directly. This entry is separate from the plain-script toolkit bundle and creates GPU resources when you call `createRenderer`. Pass the same toolkit and world you use to build scenes.
+Import `@shapeshift-labs/ink-studio/webgl.mjs` in a browser build, or serve the generated `webgl.mjs` directly. This entry is separate from the plain-script toolkit bundle and creates GPU resources when you call `createRenderer`. Pass the same toolkit and world you use to build scenes.
+
+The WebGL renderer is authored in TypeScript in `webgl.ts` and `src/webgl/*.ts`; `webgl.mjs` is its browser bundle, and `webgl.d.mts` provides types for that entry. Run `npm run build:webgl` after changing these sources. A TypeScript-aware browser bundler can also import `webgl.ts` directly.
 
 The following module can run after `ink-studio.browser.js` loads as a classic script. Adjust the WebGL module URL to the package location your server exposes.
 
@@ -839,6 +841,8 @@ Other directories:
 
 ```sh
 npm test
+npm run typecheck
+npm run build:webgl
 npm run lint
 node cli/ink-studio.js validate examples/scene.json
 node cli/ink-studio.js render examples/sculpt.js --colored
@@ -846,7 +850,7 @@ node cli/ink-studio.js snap watcher --t 0,2
 node cli/ink-studio.js check watcher
 ```
 
-`npm test` runs the unit tests and the CLI self-checks for the toolkit and simulated demos. `npm run lint` checks for source-like statements after `//` that would be silently commented out. Put usage examples in block comments.
+`npm test` type-checks and rebuilds the WebGL entry, then runs the unit tests and the CLI self-checks for the toolkit and simulated demos. `npm run typecheck` checks the TypeScript sources, and `npm run lint` checks for source-like statements after `//` that would be silently commented out. Put usage examples in block comments. The remaining toolkit, CLI, demos, examples and tests are still JavaScript and can be migrated module by module.
 
 Visual baselines are created explicitly by `snap`; no baseline images are bundled. `check` compares rendered pixels against those baselines. Keep baselines when they provide useful regression evidence; generated previews and the compiled `dist/` bundle can be regenerated.
 

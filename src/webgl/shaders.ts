@@ -1,6 +1,31 @@
+import type { PixelLook } from './types';
+
 // Shared draw and resolve shaders extracted from Inkwell Rebirth's WebGL renderer.
 // Hosts provide the ASCII shader hooks and Ink Studio's shared PixelLook GLSL.
-export function splatShaderSources(ascii) {
+export interface SplatShaderHooks {
+  vsDecl?: string;
+  vsMain?: string;
+  fsDecl?: string;
+  fsMain?: string;
+}
+
+export interface SplatShaderSources {
+  vertex: string;
+  fragment: string;
+}
+
+export interface PixelShaderSources {
+  POST_VS: string;
+  POST_FS: string;
+  CLEAN_FS: string;
+  KEY_FS: string;
+  SPR_VS: string;
+  SPR_FS: string;
+  DAMP_FS: string;
+  COPY_FS: string;
+}
+
+export function splatShaderSources(ascii?: SplatShaderHooks): SplatShaderSources {
   const SPLAT_VS = `#version 300 es
 precision highp float; precision highp int;
 uniform highp sampler2D u_data;
@@ -224,7 +249,7 @@ ${ascii ? ascii.fsMain : ''}  float power = -0.5 * (v_conic.x * v_d.x * v_d.x + 
   return { vertex: SPLAT_VS, fragment: SPLAT_FS };
 }
 
-export function pixelShaderSources(PixelLook) {
+export function pixelShaderSources(PixelLook: Pick<PixelLook, 'glsl'>): PixelShaderSources {
   const POST_VS = `#version 300 es
 void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
   const POST_FS = `#version 300 es
@@ -787,6 +812,9 @@ void main() {
       else { vec4 A = pixA(j), B = pixB(j); other = abs(dot(hitAt(p, j, vec3(A.w, B.x, B.y)) - v_P, v_N)) > u_tol; }
       if (!other) discard; } }
   o = vec4(float(v), float(v_i.z), float(v_i.w), 255.0) / 255.0; }`;
-  const KEY_FS = POST_FS.replace('out vec4 o;', 'out ivec4 o;').replace(/void main\(\)\{[\s\S]*$/, 'void main(){ ivec2 p = ivec2(gl_FragCoord.xy); ivec3 k = keyCalc(p); o = ivec4(k, k.x == -99999 ? 0 : 1); }');
+  const KEY_FS = POST_FS.replace('out vec4 o;', 'out ivec4 o;').replace(
+    /void main\(\)\{[\s\S]*$/,
+    'void main(){ ivec2 p = ivec2(gl_FragCoord.xy); ivec3 k = keyCalc(p); o = ivec4(k, k.x == -99999 ? 0 : 1); }'
+  );
   return { POST_VS, POST_FS, KEY_FS, CLEAN_FS, DAMP_FS, COPY_FS, SPR_VS, SPR_FS };
 }

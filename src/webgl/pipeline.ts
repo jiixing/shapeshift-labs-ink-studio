@@ -1,21 +1,46 @@
-import { createResources } from './resources.mjs';
-import { splatShaderSources } from './shaders.mjs';
+import { createResources } from './resources';
+import type { ShaderProgram } from './resources';
+import { splatShaderSources } from './shaders';
+import type { SplatShaderHooks } from './shaders';
 
-function plainVertex(source) {
+export interface SplatFeatures {
+  lamps?: boolean;
+  fine?: boolean;
+  textZones?: boolean;
+}
+
+export interface SplatPipelineOptions {
+  ascii?: SplatShaderHooks;
+  specialize?: boolean;
+}
+
+export interface SplatPipeline {
+  programFor(features?: SplatFeatures): ShaderProgram;
+  setOrder(indices: Int32Array): void;
+  draw(count?: number, geometry?: WebGLVertexArrayObject | null): void;
+  dispose(): void;
+}
+
+function plainVertex(source: string): string {
   return source
     .replace('if (u_lampN > 0 &&', 'if (false &&')
     .replace('if (u_fineOn > 0.5 && plain', 'if (false && plain')
     .replace('if (i >= u_azn) break;', 'break;');
 }
 
-export function createSplatPipeline(gl, { ascii, specialize = true } = {}) {
+export function createSplatPipeline(
+  gl: WebGL2RenderingContext,
+  { ascii, specialize = true }: SplatPipelineOptions = {}
+): SplatPipeline {
   const resources = createResources(gl);
   try {
     const { vertex, fragment } = splatShaderSources(ascii);
     const full = resources.program(vertex, fragment);
-    let plain, plainUnavailable = false;
+    let plain: ShaderProgram | undefined;
+    let plainUnavailable = false;
     let disposed = false;
-    let orderCapacity = 0, orderCount = 0;
+    let orderCapacity = 0;
+    let orderCount = 0;
     const vao = resources.allocate('VertexArray');
     gl.bindVertexArray(vao);
     const cornerBuffer = resources.allocate('Buffer');
@@ -32,16 +57,23 @@ export function createSplatPipeline(gl, { ascii, specialize = true } = {}) {
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-    function check() {
+    function check(): void {
       if (disposed) throw new Error('The Ink Studio splat pipeline has been disposed');
     }
+
     return {
       // Hosts may supply their own VAO or draw order. All three flags must
       // explicitly be false before the shader can omit their work.
-      programFor(features) {
+      programFor(features?: SplatFeatures): ShaderProgram {
         check();
-        if (!specialize || plainUnavailable || features?.lamps !== false ||
-            features.fine !== false || features.textZones !== false) return full;
+        if (
+          !specialize ||
+          plainUnavailable ||
+          features?.lamps !== false ||
+          features.fine !== false ||
+          features.textZones !== false
+        )
+          return full;
         if (!plain) {
           try {
             plain = resources.program(plainVertex(vertex), fragment);
@@ -53,7 +85,7 @@ export function createSplatPipeline(gl, { ascii, specialize = true } = {}) {
         }
         return plain;
       },
-      setOrder(indices) {
+      setOrder(indices: Int32Array): void {
         check();
         if (!(indices instanceof Int32Array)) throw new TypeError('Draw order must be an Int32Array');
         gl.bindBuffer(gl.ARRAY_BUFFER, orderBuffer);
@@ -64,7 +96,7 @@ export function createSplatPipeline(gl, { ascii, specialize = true } = {}) {
         orderCount = indices.length;
       },
       // The host sets the framebuffer, program uniforms, and blend state.
-      draw(count = orderCount, geometry = vao) {
+      draw(count = orderCount, geometry: WebGLVertexArrayObject | null = vao): void {
         check();
         if (!Number.isInteger(count) || count < 0 || (geometry === vao && count > orderCount))
           throw new RangeError('Invalid splat draw count');
@@ -72,7 +104,7 @@ export function createSplatPipeline(gl, { ascii, specialize = true } = {}) {
         gl.bindVertexArray(geometry);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
       },
-      dispose() {
+      dispose(): void {
         if (disposed) return;
         disposed = true;
         resources.dispose();
