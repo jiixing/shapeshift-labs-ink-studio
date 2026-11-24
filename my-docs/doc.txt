@@ -1,0 +1,5 @@
+run http-server on the root
+
+examples/typography.html
+
+kc-data.js has the rock and other object

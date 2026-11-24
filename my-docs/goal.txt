@@ -1,0 +1,10 @@
+how is the wgsl used
+
+why not just sdf rendering
+  sort of particles like, can move it see examples/typography.html scatter the letters
+  
+
+animation 
+
+
+text
