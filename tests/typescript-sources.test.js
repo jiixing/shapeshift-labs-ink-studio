@@ -1,0 +1,41 @@
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+const library = require('..');
+
+const migrated = ['art-effects', 'airflow', 'light-schedule', 'reflection-plane', 'swept-disc'];
+const root = path.join(__dirname, '..');
+const relative = file => path.relative(root, file).split(path.sep).join('/');
+
+test('migrated source modules keep their CommonJS paths and generated implementations', () => {
+  for (const name of migrated) {
+    assert.equal(require('../src/' + name + '.js'), require('../src/' + name + '.generated.js'));
+  }
+});
+
+test('browser bundles use generated global scripts instead of CommonJS loaders', () => {
+  const files = library.files().map(relative);
+  for (const name of migrated) {
+    assert(files.includes('src/' + name + '.generated.js'), name);
+    assert(!files.includes('src/' + name + '.js'), name);
+  }
+  const context = vm.createContext({});
+  vm.runInContext(library.bundle(), context);
+  assert.equal(vm.runInContext(`[
+    ArtEffects, Airflow, LightSchedule, ReflectionPlane, SweptDisc
+  ].every(value => value && typeof value === 'object')`, context), true);
+});
+
+test('migrated effect defaults and shader source remain stable', () => {
+  const ArtEffects = require('../src/art-effects.js');
+  const LightSchedule = require('../src/light-schedule.js');
+  assert.equal(ArtEffects.prepare({ heat: {} }, []).haze.rate, 4);
+  assert.equal(LightSchedule.glsl, `
+float scheduledFalloff(vec3 delta, float radius, vec4 direction) {
+  float radial = max(0.0, 1.0 - length(delta) / radius);
+  float facing = direction.w > 0.5 ? smoothstep(-.07, .25, dot(delta, direction.xyz)) : 1.0;
+  return radial * radial * facing;
+}
+`);
+});

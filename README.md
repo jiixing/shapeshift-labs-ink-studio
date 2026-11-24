@@ -844,7 +844,11 @@ Other directories:
 ```sh
 npm test
 npm run typecheck
+npm run typecheck:src
+npm run typecheck:cli
 npm run build:webgl
+npm run build:src
+npm run build:cli
 npm run lint
 node cli/ink-studio.js validate examples/scene.json
 node cli/ink-studio.js render examples/sculpt.js --colored
@@ -852,7 +856,13 @@ node cli/ink-studio.js snap watcher --t 0,2
 node cli/ink-studio.js check watcher
 ```
 
-`npm test` type-checks and rebuilds the WebGL entry, then runs the unit tests and the CLI self-checks for the toolkit and simulated demos. `npm run typecheck` checks the TypeScript sources, and `npm run lint` checks for source-like statements after `//` that would be silently commented out. Put usage examples in block comments. The remaining toolkit, CLI, demos, examples and tests are still JavaScript and can be migrated module by module.
+`npm test` type-checks and rebuilds the WebGL, migrated source scripts and CLI entries, then runs the unit tests and the CLI self-checks for the toolkit and simulated demos. `npm run typecheck` checks all three TypeScript projects; `npm run typecheck:src` and `npm run typecheck:cli` check the source scripts and command-line entry independently.
+
+The CLI entry point is authored in `cli/ink-studio.ts` with strict TypeScript checking. `cli/ink-studio.js` remains the stable package executable and loads the generated CommonJS file `cli/ink-studio.generated.js`. That generated file is kept in the checkout, so direct CLI commands work without a manual build; run `npm run build:cli` after changing the TypeScript source. The renderer and other JavaScript dependencies intentionally remain external to the CLI bundle while migration continues.
+
+Five CLI/toolkit dependencies are now authored in TypeScript: `src/art-effects.ts`, `src/airflow.ts`, `src/light-schedule.ts`, `src/reflection-plane.ts` and `src/swept-disc.ts`. Their original `.js` paths remain stable CommonJS loaders for checked-in `.generated.js` files. The toolkit's browser bundle reads the generated global scripts directly, preserving its script-based loading model. Run `npm run build:src` after changing any of these TypeScript sources.
+
+`npm run lint` checks for source-like statements after `//` that would be silently commented out. Put usage examples in block comments. The remaining toolkit, renderer, demos, examples and tests are still JavaScript and can be migrated module by module.
 
 Visual baselines are created explicitly by `snap`; no baseline images are bundled. `check` compares rendered pixels against those baselines. Keep baselines when they provide useful regression evidence; generated previews and the compiled `dist/` bundle can be regenerated.
 

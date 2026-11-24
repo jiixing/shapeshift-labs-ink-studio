@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/art-effects.ts",
+    "src/airflow.ts",
+    "src/light-schedule.ts",
+    "src/reflection-plane.ts",
+    "src/swept-disc.ts"
+  ],
+  "exclude": ["node_modules", "src/**/*.generated.js"]
+}

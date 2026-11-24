@@ -7,7 +7,8 @@ const fs = require('fs'),
   path = require('path'),
   { randomUUID } = require('crypto');
 const KIT_DIR = path.join(__dirname, 'src', 'kit'),
-  read = f => fs.readFileSync(f, 'utf8').replace(/\nif \(typeof module[^\n]*\n?$/, '\n');
+  read = f => fs.readFileSync(f, 'utf8').replace(/\nif \(typeof module[^\n]*\n?$/, '\n'),
+  runtimeFile = f => fs.existsSync(f.replace(/\.js$/, '.ts')) ? f.replace(/\.js$/, '.generated.js') : f;
 const files = () =>
   [
     'src/art-passes.js', 'src/art-ink.js', 'src/art-effects.js', 'src/art-stability.js',
@@ -16,13 +17,13 @@ const files = () =>
     'src/volume-field.js', 'src/volume-light.js', 'src/scene-optics.js', 'src/splat-effects.js',
     'src/surface-look.js', 'src/builder.js', 'src/sculpt.js'
   ]
-    .map(f => path.join(__dirname, f))
+    .map(f => runtimeFile(path.join(__dirname, f)))
     .concat(
       fs
         .readdirSync(KIT_DIR)
-        .filter(f => f.endsWith('.js'))
+        .filter(f => f.endsWith('.js') && !f.endsWith('.generated.js'))
         .sort()
-        .map(f => path.join(KIT_DIR, f))
+        .map(f => runtimeFile(path.join(KIT_DIR, f)))
     );
 const demoFiles = () => [
   path.join(__dirname, 'demos', 'labscenes.js'),

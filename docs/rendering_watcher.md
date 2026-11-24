@@ -95,8 +95,8 @@ Watcher uses `K.rig`, which writes the posed splats directly into `world.data`. 
 | `cli/render.js` | `render(world, options)` | Main software renderer. It derives the art-pixel grid, evaluates splat motion, projects each covariance to a screen ellipse, sorts and blends splats, resolves outlines/lighting, quantizes colors, and returns RGB art pixels. |
 | `cli/render.js` | `viewMatrix(...)` | Builds the camera's column-major view matrix. |
 | `cli/scene-optics.js` | `cameraRays(...)` | Creates the ray sampler used for per-pixel camera projection and optional optics. |
-| `src/airflow.js` | `Airflow.frame(...)` | Prepares airflow state for splats that carry airflow motion. |
-| `src/light-schedule.js` | `LightSchedule.gain(...)`, `LightSchedule.select(...)` | Computes daylight response and selects scheduled lights affecting the frame. |
+| `src/airflow.ts` | `Airflow.frame(...)` | Prepares airflow state for splats that carry airflow motion. |
+| `src/light-schedule.ts` | `LightSchedule.gain(...)`, `LightSchedule.select(...)` | Computes daylight response and selects scheduled lights affecting the frame. |
 | `src/sample-coverage.js` | `SampleCoverage.amount(...)` | Resolves sample-withdrawal coverage; the default is zero. |
 | `src/pixel-look.js` | `PixelLook.bayerRank(...)` | Supplies the ordered dither offset used before nearest-palette quantization. |
 
