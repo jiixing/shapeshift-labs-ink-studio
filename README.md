@@ -682,7 +682,7 @@ Common rendering controls:
 | `--style slate\|moss\|ember` | Change a JSON scene's style. |
 | `--poke '1:x,y,z;2:x,y,z'` | Script timed taps into a simulated scene. |
 
-The default look uses palette quantization and dithering. `--colored` preserves native interior detail while smoothing silhouettes; it does not fit a new palette every frame. `PixelLook` exposes shared CPU and shader helpers for hosts implementing the same look.
+The default look uses palette quantization and dithering. `--colored` preserves native interior detail while smoothing silhouettes; it does not fit a new palette every frame. `PixelLook` exposes shared CPU and shader helpers for hosts implementing the same look. For the high-level modules and functions behind `node cli/ink-studio.js render watcher --t 2.6`, see the [Watcher rendering walkthrough](docs/rendering_watcher.md).
 
 Use `finish.look.tone` for a luminance-based palette with a black cutoff, ordered or seeded blue-noise dither, and explicit color stops. The [pixel look guide](docs/pixel-look.md) covers the stipple preset, art-pixel size and browser integration. The [stipple example](examples/stipple.json) pairs it with a keyframed surface light.
 
