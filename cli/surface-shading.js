@@ -1,5 +1,11 @@
 // Bind the common shader to the software renderer's camera and splat buffers.
 const SurfaceLook = require('../src/surface-look.js');
+const TargetSelectors = require('../src/target-selectors.js');
+const ReflectionProxy = require('../src/reflection-proxy.js');
+const unit = vector => {
+  const length=Math.hypot(...vector) || 1;
+  return vector.map(n=>n/length);
+};
 const LightSchedule = require('../src/light-schedule.js');
 const { unpack } = require('../src/render-stages.js');
 const linear = require('../src/color-space.js').prepare('srgb', 'srgb-linear');
@@ -21,7 +27,7 @@ function surfaceShading(world, options, camera) {
 
   function rigFrame(i) {
     const part = rig?.bid[i];
-    if (!part || rig.free?.[i] || !(projected(i) || bevel(i) || local(i) || thin(i) ||
+    if (!part || rig.free?.[i] || !(projected(i) || bevel(i) || local(i) || proxied(i) || thin(i) ||
         options.reflectionDetail!==false && planar(i) && materials[surfaceData[i*STRIDE]-1]?.captureDetail)) return null;
     if (!rigFrames.has(part)) {
       const { M } = require('../index.js').load().KIT;
@@ -34,6 +40,7 @@ function surfaceShading(world, options, camera) {
   }
   const { eye, forward, parallel, footprint, time, reflection, localReflection, sky, skyReflectionSource, blueNoise } = camera;
   const { STRIDE } = SurfaceLook;
+  const art=camera.artLighting, proxyReflection=camera.proxyReflection;
   const liveLight = camera.sun ?? (world.surfaceLight === undefined ? undefined :
     SurfaceLook.prepareLightTrack(world.surfaceLight)(time));
   const ramps = options.raw ? null : SurfaceLook.lightRamps(options.surfaceLightRamps ?? world.look?.surfaceLightRamps);
@@ -41,14 +48,16 @@ function surfaceShading(world, options, camera) {
     const material = SurfaceLook.prepare(SurfaceLook.withLightRamps(settings, ramps), world.pal, liveLight ?? light, world.surfaceEffects,
       { colorCurves: options.colorCurves !== false, colorLut: options.colorLut !== false, colorStack: options.colorStack !== false,
         paletteConstraints: options.paletteConstraints !== false && (options.lookMasks !== false || !settings.paletteConstraint?.mask),
-        skipMasks: options.lookMasks === false, paintShadowBands: options.shadowBandPaint !== false, transmission: options.transmission !== false, detailKits:options.surfaceDetailKits!==false,
+        skipMasks: options.lookMasks === false, diffuseRamps: options.diffuseRamps !== false,
+        paintShadowBands: options.shadowBandPaint !== false,
+        shadeNormals: options.shadeNormals !== false, transmission: options.transmission !== false, detailKits:options.surfaceDetailKits!==false,
         paletteRoles: world.paletteRoles, facingRamp, facingColors: options.facingColors !== false && !options.raw,
         directionalColors: options.directionalColors !== false && !options.raw, blueNoise, onPaletteClip: camera.onPaletteClip,
         ditherSpaceOverride:options.ditherSpaceOverride });
     if (bevelDistance && material.needsDistance) material.bevelDistance = bevelDistance;
     return material;
   });
-  const posedFrames = materials.some(material => material.facingProfile || material.directionProfile) &&
+  const posedFrames = materials.some(material => material.facingProfile || material.directionProfile || material.diffuseLayers) &&
     (world.anim?.bones || rig || world.reconstructionPose) &&
     require('./art-passes.js').sampleFrames(world, time);
   const posedRows = [];
@@ -78,10 +87,12 @@ function surfaceShading(world, options, camera) {
     }
     if (paletteSlots) paletteSlots.push(slots);
   }
-  const planarMaterials = materials.map(
-    material =>
-      reflection && material.layers.some(layer => layer.type === 'planarReflection' && reflection.has(layer.plane))
-  );
+  const proxyMaterials=proxyReflection && materials.map(material=>material.layers.some(layer=>
+    layer.type==='planarReflection' && layer.proxy));
+  const proxied=i=>Boolean(proxyMaterials?.[surfaceData[i*STRIDE]-1]);
+  const proxyTargets=proxyMaterials?.some(Boolean) && TargetSelectors.index(world);
+  const planarMaterials = materials.map((material,index)=>
+    proxyMaterials?.[index] || reflection && material.layers.some(layer=>layer.type==='planarReflection'&&reflection.has(layer.plane)));
   const localMaterials = localReflection && materials.map(material => material.layers.some(layer =>
     layer.type === 'localReflection' && localReflection.has(layer.probe)));
   const skyMaterials = sky && materials.map(material => material.layers.some(layer =>
@@ -162,7 +173,7 @@ function surfaceShading(world, options, camera) {
     sample.worldPosition[0] = x;
     sample.worldPosition[1] = y;
     sample.worldPosition[2] = z;
-    sample.reflectionDepth = captureDetail ? (eye[0]-x)*forward[0]+(eye[1]-y)*forward[1]+(eye[2]-z)*forward[2] : undefined;
+    sample.reflectionDepth = captureDetail || proxied(i) ? (eye[0]-x)*forward[0]+(eye[1]-y)*forward[1]+(eye[2]-z)*forward[2] : undefined;
     sample.reflectionPixelAngle = captureDetail ? 1/(camera.pixelsPerUnit*
       (camera.orthographic ? Math.max(.1,sample.reflectionDepth) : 1)) : undefined;
     sample.exposure = prepared.kitExposure ? kitExposure : undefined;
@@ -176,7 +187,9 @@ function surfaceShading(world, options, camera) {
     normal[1] = surfaceData[offset + 2];
     normal[2] = surfaceData[offset + 3];
     sample.skyAccess = camera.exposure?.light?.(x,y,z) ?? 1;
-    sample.visibility = camera.sunVisibility?.(i, x, y, z) ?? surfaceData[offset + 4] * (camera.cloudShadow?.(x, y, z) ?? 1) * sample.skyAccess;
+    const liveVisibility=camera.sunVisibility?.(i,x,y,z);
+    const storedVisibility=surfaceData[offset+4]*(camera.cloudShadow?.(x,y,z)??1)*sample.skyAccess;
+    sample.visibility=liveVisibility??(art?.curves.shadow?.(storedVisibility)??storedVisibility);
     const tx = surfaceData[offset + 5],
       ty = surfaceData[offset + 6],
       tz = surfaceData[offset + 7];
@@ -213,7 +226,7 @@ function surfaceShading(world, options, camera) {
     }
     sample.sky = environment(i) ? sampleSky : undefined;
     sample.localReflection = local(i) ? sampleLocal : undefined;
-    if (sample.sky || sample.localReflection || prepared.thin || captureDetail) {
+    if (sample.sky || sample.localReflection || proxied(i) || prepared.thin || captureDetail) {
       sample.skyView[0] = vx;
       sample.skyView[1] = view[1];
       sample.skyView[2] = vz;
@@ -239,9 +252,44 @@ function surfaceShading(world, options, camera) {
       const length = Math.hypot(...ray);
       sample.lightDirection = ray.map(x => x / length);
     }
+    const shadePose = prepared.diffuseLayers && poseAt(i);
+    sample.shadeNormalFrame = shadePose || undefined;
+    if (shadePose) {
+      const local = shadePose.localOffset(dx,y-centerY,dz);
+      sample.shadeNormalPosition = local.map((value,k) => value+shadePose.rest[k]);
+      sample.shadeNormalLight = prepared.sun;
+    } else {
+      sample.shadeNormalPosition = undefined;
+      sample.shadeNormalLight = undefined;
+    }
+    sample.shotDiffuse=prepared.diffuseLayers && (art?.normal||art?.band||art?.curves.key) ?
+      (normal,incidence,wrap,bias,visibility)=>{
+        if(art.normal){
+          const worldNormal=shadePose ? normal : sample.skyNormal?.(normal) ??
+            (angle ? [c*normal[0]+s*normal[2],normal[1],c*normal[2]-s*normal[0]] : normal);
+          const shaped=art.normal(i,worldNormal);
+          const direction=prepared.sun;
+          incidence=shaped[0]*direction[0]+shaped[1]*direction[1]+shaped[2]*direction[2];
+        }
+        const cutoff=Math.max(0,Math.min(1,(incidence+wrap)/(1+wrap)-bias));
+        const level=(art.band?.(i,cutoff)??cutoff)*visibility;
+        if(!art.curves.key)return level;
+        const rgb=art.curves.key([level,level,level]);
+        return .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
+      } : undefined;
     sample.reflection =
       planar(i) && sx !== undefined
         ? (layer, n, original, detail) => {
+            if(layer.proxy && proxyReflection){
+              const normal=sample.skyNormal?unit(sample.skyNormal(n)):n;
+              const facing=unit(sample.skyView);
+              const tilted=sample.skyNormal?sample.skyNormal(n):n, flat=sample.skyNormal?sample.skyNormal(original):original;
+              const target=proxyTargets.row(i);
+              return proxyReflection(layer,{x:sx,y:sy,shift:tilted.map((v,k)=>v-flat[k]),detail,
+                depth:sample.reflectionDepth-(camera.reflectionSetback??0),point:sample.worldPosition,direction:ReflectionProxy.reflected(facing,normal),
+                kind:'material',id:target.object??target.material??prepared.settings.id??layer.id});
+            }
+            if (!reflection) return null;
             if (detail && sample.skyNormal) {
               const tilted = sample.skyNormal(n), flat = sample.skyNormal(original);
               return reflection(layer,sx,sy,tilted[0]-flat[0],tilted[1]-flat[1],tilted[2]-flat[2],undefined,detail);

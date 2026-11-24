@@ -20,6 +20,9 @@ Both project files reference the original WAVs by relative path.
 Use [Foley spotting](foley-perspective.md) to derive a session with paired
 close and distant takes from committed world events.
 
+Use the [attention handoff audition](attention-handoff.md) to compare a few
+timings for the same clip against one fixed picture excerpt.
+
 ## Session
 
 A CLI recipe contains a `session` object and an `assets` table mapping
@@ -96,6 +99,11 @@ A mapped cue keeps its original address in the placement report. The clock map n
 
 ## Take edits
 
+Use [harmonic and percussive separation](harmonic-percussive-separation.md)
+to build a session with separately editable tonal and transient clips.
+Use `transpose` with a signed `semitones` value to change a take’s pitch
+while retaining its duration and sync point.
+
 A take source is a mono or stereo WAV. Take trims and handles are zero-based,
 half-open ranges on that WAV's native PCM grid. The sync point must sit inside
 the active range. To use a named transient, put a
@@ -129,10 +137,16 @@ lead-in, then uses an alternate for part of the tail.
 ]
 ```
 
+Use `nudge` with a signed `offsetSamples` to move playback while retaining the
+spot anchor for reconform.
+
 The remaining edits are `add-clip` (full clip object), `remove-clip`,
 `spot`, `take`, `handles`, and `fades`. `trim`, `handles` and
 `slip-head` can target a named alternate via `take`. Editing is
 nondestructive and validates the resulting session before returning it.
+
+Use the [post-production workshop](audio-post-production.md) for field recorder
+relink, room tone, repair auditions, and a verified REAPER round trip.
 
 ## Reconform and use in a scene
 

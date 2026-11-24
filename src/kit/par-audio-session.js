@@ -19,12 +19,20 @@
   function create(input={},host) {
     check(record(input) && Object.keys(input).length<=128 && Object.keys(input).every(id),'Expected named session audio assets');
     let count=0;
-    const assets=Object.fromEntries(Object.entries(input).map(([name,raw])=>{
+    const assets=Object.create(null);
+    function addAsset(name,raw) {
+      check(id(name) && !Object.hasOwn(assets,name) && Object.keys(assets).length<128,'Choose a new session asset name');
       const pcm=M.audio(raw);
+      check(pcm.channels<=2 && pcm.samples.length>0 && count+pcm.samples.length<=pcmBudget,'Session asset PCM budget exceeded');
+      assets[name]={...pcm,samples:Float64Array.from(pcm.samples)};
       count+=pcm.samples.length;
-      check(pcm.channels<=2 && pcm.samples.length>0 && count<=pcmBudget,'Session asset PCM budget exceeded');
-      return [name,{...pcm,samples:Float64Array.from(pcm.samples)}];
-    }));
+    }
+    function discardAsset(name) {
+      if (!Object.hasOwn(assets,name)) return;
+      count-=assets[name].samples.length;
+      delete assets[name];
+    }
+    for (const [name,raw] of Object.entries(input)) addAsset(name,raw);
     const load=name=>{
       check(Object.hasOwn(assets,name),'Missing session asset '+name);
       return assets[name];
@@ -71,14 +79,21 @@
     }
     function prepareAudio(plan,lane,take) {
       const row=plan.audio.get(lane).takes.get(take);
+      if (row.silence===true) return {from:0,duration:0,write() {}};
       const placed=plan.placed.get(lane+'/'+take);
       if (placed) return {...placed,from:0,duration:plan.editorialClock.end};
-      let pcm, fallback=0;
+      let pcm, kitEvents, fallback=0, level=1;
       if (row.motif) {
         const {source,score,plan:saved,role}=row.motif;
         const {stem,report}=M.sampleMotif.render(saved,load(source),load(score),role);
         pcm=stem;
         fallback=Math.floor(report.firstSample*plan.rate/report.sampleRate);
+      } else if (row.kit) {
+        const take=M.padPattern.validate(row.performance);
+        const rendered=M.sampleKit.render(row.kit,assets,take.events,{...take.options,sampleRate:plan.rate,stems:false});
+        pcm=rendered.value;
+        kitEvents=rendered.report.events;
+        level=1/rendered.report.gain;
       } else if (row.editorial) {
         const {value,stems}=M.audioEditorial.render(row.editorial,assets,{stems:row.track!==undefined});
         pcm=row.track===undefined ? value : stems[row.track];
@@ -92,12 +107,12 @@
       const duration=Math.min(plan.frames-from,Math.ceil((last-first)/step));
       const reader=S.pcmReader(pcm,first,last,step);
       check(duration*reader.cost<=80e6,'Audio take exceeds its resampling budget');
-      return {from,duration,write(out,start,end) {
+      return {from,duration,kitEvents,write(out,start,end) {
         const pair=[0,0];
         for (let at=Math.max(start,from);at<Math.min(end,from+duration);at++) {
           reader.read(first+(at-from)*step,pair);
           const i=(at-start)*2;
-          out[i]=pair[0]; out[i+1]=pair[1];
+          out[i]=pair[0]*level; out[i+1]=pair[1]*level;
         }
       }};
     }
@@ -190,8 +205,10 @@
           }
           return spots.get(address).filter(({sessionRange:span})=>!span || span.fromSample<to && span.toSample>from);
         }
-        const {from:at,duration}=prepareAudio(plan,lane,take);
-        return at<to && at+duration>from ? [{source:row,sessionRange:{fromSample:at,toSample:at+duration}}] : [];
+        const {from:at,duration,kitEvents}=prepareAudio(plan,lane,take);
+        return at<to && at+duration>from ? [{source:row,sessionRange:{fromSample:at,toSample:at+duration},
+          ...(kitEvents && {kitEvents:kitEvents.filter(hit=>at+hit.at>=from && at+hit.at<to)
+            .map(hit=>({...hit,sessionSample:at+hit.at}))})}] : [];
       };
       for (const {from:begin,to,choices} of segments) {
         const from=Math.max(begin,begin+warmup-lead), at=lead+from-begin-warmup;
@@ -344,7 +361,7 @@
       return audio(a.sampleRate,Float64Array.from(a.samples,(sample,i)=>sample-b.samples[i]));
     }
     function auditionPhrase(session,settings) {
-      check(fields(settings,['lane','phrase','takes','from','to','reference']) && id(settings.lane) && id(settings.phrase) &&
+      check(fields(settings,['lane','phrase','takes','from','to','reference','loudness']) && id(settings.lane) && id(settings.phrase) &&
         typeof (settings.reference ?? true)==='boolean','Choose a score lane and recorded phrase to audition');
       const plan=compile(session,assets,host), {lane,phrase}=settings;
       const names=settings.takes ?? [...plan.producers.keys()].filter(take=>take!==reference && phraseTake(plan,lane,take,phrase));
@@ -366,11 +383,17 @@
         const result=renderPlan({...plan,choices:replace(plan.choices,choice)},preview);
         return {take,value:result.value,headroom:result.report.mixer.headroom ?? 1};
       });
+      const report={lane,phrase,takes:all,sampleRate:plan.rate,firstSample:window.from,endSample:window.to,
+        phraseRange:plan.range(from,to)};
+      if (settings.loudness!==undefined) {
+        const matched=M.mixerMonitor.match(prints.map(({value,headroom})=>({value,report:{headroom}})),settings.loudness);
+        const {takes:measurements,...level}=matched.report;
+        return {audio:Object.fromEntries(all.map((take,i)=>[take,matched.audio[i]])),
+          report:{...report,loudness:{...level,takes:Object.fromEntries(all.map((take,i)=>[take,measurements[i]]))}}};
+      }
       const gain=Math.min(...prints.map(row=>row.headroom));
       return {audio:Object.fromEntries(prints.map(({take,value,headroom})=>[take,headroom===gain ? value : {
-        ...value,samples:value.samples.map(value=>value*gain/headroom)}])),
-        report:{lane,phrase,takes:all,sampleRate:plan.rate,firstSample:window.from,endSample:window.to,
-          phraseRange:plan.range(from,to),gain}};
+        ...value,samples:value.samples.map(value=>value*gain/headroom)}])),report:{...report,gain}};
     }
 
     function compare(before,after,preview) {
@@ -394,9 +417,12 @@
       return S.musicHandoff(plan,recipe,material,M.mixer.render(recipe,material,host));
     }
     const edit=(session,changes)=>edits(session,assets,changes,host);
+    const compose=S.createCompositionWorkbench({assets,compile:session=>compile(session,assets,host),edit,render});
     const accompaniment=S.createPerformanceAccompaniment({
       compile:session=>compile(session,assets,host),render:renderPlan});
     const experiments=S.createSessionExperiment({compile:session=>compile(session,assets,host),render:renderPlan,edit,assets});
+    const listeningRound=S.createListeningRound({assets,compile:session=>compile(session,assets,host),experiments});
+    const listeningEvidence=S.createListeningEvidence({assets,compile:session=>compile(session,assets,host),render:renderPlan,edit});
     const performanceBallot=S.createPerformanceBallot({compile:session=>compile(session,assets,host),
       edit,experiments,accompaniment});
     function prepareTransport(session,mode='buffered') {
@@ -424,13 +450,26 @@
       }));
       return {session,rate,map,frames,lanes,sourceLanes,mixer,pins,choices,media,cache,report:inspect(session,plan)};
     }
+    function prepareSound(session,{lane,revision,from,to,warmAt},extraAssets={}) {
+      // Compile a temporary score take without using a slot in the editable session.
+      const take='sound-preview';
+      const scratch={...session,takes:{[take]:revision},comp:[]};
+      const plan=compile(scratch,{...assets,...extraAssets},host);
+      const range=plan.choice({lane,take,from,to});
+      check(!plan.audio.has(lane) && !plan.producers.get(take).score.tracks[lane].external,
+        'Choose a native score lane for sound audition');
+      const material=incremental.prepareSource(plan,lane,take);
+      if (warmAt>=range.from && warmAt<range.to) material.block(Math.floor(warmAt/S.sessionBlocks.blockFrames));
+      return {range,material};
+    }
     const prepareLive=session=>prepareTransport(session,'deferred');
     const materialize=prepared=>prepared.incremental ? prepareTransport(prepared.session,'blocks') : prepared;
-    const openPreparedTransport=(prepared,options)=>S.openSessionTransport(materialize(prepared),options,
-      {assets,host,edit,trace,prepareLive,materialize});
+    const openPreparedTransport=(prepared,options,liveControl)=>S.openSessionTransport(materialize(prepared),options,
+      {assets,host,edit,trace,prepareLive,materialize},liveControl);
     const open=(session,options)=>openPreparedTransport(prepareLive(P.data.freeze(P.data.clone(session))),options);
-    return Object.freeze({inspect,trace,edit,render,compare,auditionPhrase,handoff,arrangePerformance:accompaniment.run,performanceBallot,experiment:experiments.run,keepExperiment:experiments.keep,
-      open,prepareTransport,prepareLive,openPreparedTransport});
+    return Object.freeze({inspect,trace,edit,render,compare,compose,auditionPhrase,handoff,arrangePerformance:accompaniment.run,performanceBallot,listeningRound,
+      listeningEvidence:listeningEvidence.listen,keepListeningRepair:listeningEvidence.keep,experiment:experiments.run,keepExperiment:experiments.keep,
+      open,prepareTransport,prepareLive,prepareSound,openPreparedTransport,addAsset,discardAsset});
   }
   M.musicSession=Object.freeze({create});
 })(KIT.procedural);

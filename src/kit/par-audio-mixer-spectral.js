@@ -4,17 +4,17 @@
   const tau=2*Math.PI, wrap=phase=>phase-tau*Math.round(phase/tau);
   const pair=size=>({re:new Float64Array(size),im:new Float64Array(size)});
   function convolution(raw,rate,time,asset) {
-    check(fields(raw,['type','wet','impulse','fromSample','toSample','reverse','preDelayMs','gainDb']),
+    check(fields(raw,['type','wet','impulse','fromSample','toSample','reverse','preDelayMs','gainDb','rateCompensate']),
       'Unknown convolution parameter');
     const pcm=asset(raw.impulse), total=pcm.samples.length/pcm.channels;
-    const {fromSample=0,toSample=total,reverse=false,preDelayMs=0}=raw, step=pcm.sampleRate/rate;
+    const {fromSample=0,toSample=total,reverse=false,preDelayMs=0,rateCompensate=false}=raw, step=pcm.sampleRate/rate;
     check(integer(fromSample,0,total-1) && integer(toSample,fromSample+1,total) &&
-      typeof reverse==='boolean' && finite(preDelayMs,0,1000) && finite(step,1/128,16),
+      typeof reverse==='boolean' && typeof rateCompensate==='boolean' && finite(preDelayMs,0,1000) && finite(step,1/128,16),
     'Invalid impulse slice, predelay or resampling ratio');
     const frames=Math.ceil((toSample-fromSample)/step), delay=Math.round(preDelayMs*rate/1000);
     check(integer(frames,1,Math.min(rate*8,262144)),'Convolution impulse exceeds eight seconds or its PCM budget');
     const size=Math.min(65536,2**Math.ceil(Math.log2(Math.max(64,frames*2))));
-    const hop=size/2, partitions=Math.ceil(frames/hop), gain=time.lane(raw.gainDb,0,-48,18,'convolution gain');
+    const hop=size/2, partitions=Math.ceil(frames/hop), gain=time?.lane(raw.gainDb,0,-48,18,'convolution gain');
     const resampler=S.pcmReader(pcm,fromSample,toSample,step);
     function block(input,output) {
       const transform=S.fftSetup({sampleRate:rate},{size,window:'rect'},size,1).transform;
@@ -50,12 +50,12 @@
           for (let i=0;i<size && i+at+delay<end;i++) output[2*(i+at+delay)+ch]+=sum.re[i]/size;
         }
       }
-      const trim=gain.reader();
-      for (let i=0;i<end;i++) {
-        const scale=db(trim(i));
+      const trim=gain?.reader(), amplitude=rateCompensate ? step : 1;
+      for (let i=0;(trim||amplitude!==1)&&i<end;i++) {
+        const scale=amplitude*(trim?db(trim(i)):1);
         output[2*i]*=scale; output[2*i+1]*=scale;
       }
-      return {impulse:raw.impulse,impulseFrames:frames,predelayFrames:delay,fftSize:size,partitions};
+      return {impulse:raw.impulse,impulseFrames:frames,predelayFrames:delay,fftSize:size,partitions,...(rateCompensate && {rateCompensation:step})};
     }
     return {tail:frames-1+delay,cost:3*Math.log2(size)+8*partitions,block};
   }
@@ -126,6 +126,11 @@
     return {latency:half,tail:end-at,planEnd:inputEnd=>at<inputEnd+half ? Math.max(inputEnd,end) : inputEnd,
       cost:8+4*Math.log2(size),extra:3,block};
   }
+  P.mediaGraph.prepareImpulseResponse=(impulse,pcm,rate)=>{
+    check([1,2].includes(pcm.channels)&&pcm.samples.length>0,
+      'Room response needs a nonempty mono or stereo impulse: '+impulse);
+    return convolution({impulse},rate,undefined,()=>pcm);
+  };
   S.soundConvolution=convolution;
   S.spectralFreeze=freeze;
 })(KIT.procedural);

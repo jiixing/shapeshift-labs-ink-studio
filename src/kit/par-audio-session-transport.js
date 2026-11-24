@@ -17,12 +17,12 @@
     });
   }
 
-  S.openSessionTransport=function openSessionTransport(initial,options={},editor) {
+  S.openSessionTransport=function openSessionTransport(initial,options={},editor,liveControl) {
     check(fields(options,['from','to','at','preroll','gain','fadeSamples','leadInSamples','monitor']) &&
       typeof (options.preroll ?? true)==='boolean' && finite(options.gain ?? 1,0,2),
     'Invalid live session settings');
     let plan=initial, time=timeline(plan);
-    const {rate}=plan, key=clockKey(plan), gain=options.gain ?? 1;
+    const {rate}=plan, gain=options.gain ?? 1;
     const defaultFade=options.fadeSamples ?? Math.round(.012*rate);
     check(integer(defaultFade,0,rate/2),'A take fade needs up to half a second');
     let loop=time.range(options.from ?? samples(0),options.to ?? samples(plan.frames));
@@ -35,13 +35,15 @@
     check(integer(position,first,loop.to-1),'Starting playhead is outside the loop and lead-in');
     const feeds=Object.fromEntries(plan.sourceLanes.map(name=>[name,[0,0]]));
     let clock, desk, effects, warmup, lanes, cache, revision=0;
+    let sound=null, soundFade=null;
     let runFrame=0, frame=0, pass=0, clippedFrames=0, monitor=null;
     function reset(next,at,preroll,selection=monitor) {
       clock=S.sessionMixerTime(rate,next.map);
-      desk=S.prepareSessionMixer(next.mixer,editor.assets,clock,undefined,editor.host);
+      desk=S.prepareSessionMixer(next.mixer,editor.assets,clock,undefined,editor.host,liveControl);
       monitor=selection===null ? null : S.sessionMonitor(selection,desk.taps,next.lanes);
       effects=S.sessionEffects(rate,feeds);
       lanes=undefined;
+      sound=soundFade=null;
       runFrame=0;
       prepare(next);
       if (preroll) for (let sample=0;sample<at;sample++) step(sample);
@@ -93,9 +95,8 @@
       return weights;
     }
 
-    function read(lane,dest,index,weight,at) {
+    function read(take,dest,weight,at) {
       if (!weight) return;
-      const take=lane.materials[index];
       let data=take, indexInBlock=at, offset=2*(at-(take.from ?? 0));
       if (take.block) {
         const block=Math.floor(at/blockFrames);
@@ -115,8 +116,33 @@
       effects.add(take.effect,l,r,send,drive,weight);
     }
 
+    function soundProgress() {
+      if (!soundFade) return 1;
+      const progress=(frame-soundFade.start)/defaultFade;
+      if (progress<1) return progress;
+      soundFade=null;
+      return 1;
+    }
+
+    function setSound(candidate) {
+      const source=candidate && effects.prepare(()=>({...candidate,material:{...candidate.material,
+        effect:effects.register(candidate.lane,candidate.material)}}));
+      const progress=soundProgress(), outgoing=[];
+      for (const [row,weight] of soundFade?.outgoing ?? []) {
+        const remaining=weight*(1-progress);
+        if (remaining) outgoing.push([row,remaining]);
+      }
+      if (sound && progress) outgoing.push([sound,progress]);
+      sound=source;
+      soundFade=defaultFade && (outgoing.length || sound) ? {start:frame,outgoing} : null;
+      return {frame,scoreSample:position,pass, sound:soundInfo()};
+    }
+
+    const soundInfo=()=>sound && {lane:sound.lane,id:sound.id,source:sound.source,from:sound.from,to:sound.to};
+
     function step(at) {
       effects.start();
+      const progress=soundProgress(), outgoing=soundFade?.outgoing;
       for (const name of plan.lanes) {
         const lane=lanes[name], dest=feeds[name];
         dest[0]=dest[1]=0;
@@ -125,16 +151,27 @@
         while (lane.choices[lane.index]?.to<=at) lane.index++;
         const row=lane.choices[lane.index], weights=readWeights(lane,frame);
         if (monitor?.mode==='mute' && monitor.lane===name) continue;
-        const base=weights[0];
+        let retained=1;
+        if (sound?.lane===name && at>=sound.from && at<sound.to) {
+          read(sound.material,dest,progress,at);
+          retained-=progress;
+        }
+        if (outgoing) for (const [prior,weight] of outgoing) if (prior.lane===name && at>=prior.from && at<prior.to) {
+          const fading=weight*(1-progress);
+          read(prior.material,dest,fading,at);
+          retained-=fading;
+        }
+        retained=Math.max(0,retained);
+        const base=weights[0]*retained;
         if (base) {
-          if (!row || at<row.from) read(lane,dest,lane.fallback,base,at);
+          if (!row || at<row.from) read(lane.materials[lane.fallback],dest,base,at);
           else {
             const u=row.fadeSamples ? Math.min(1,(at-row.from)/row.fadeSamples,(row.to-1-at)/row.fadeSamples) : 1;
-            read(lane,dest,row.index,base*u,at);
-            read(lane,dest,lane.fallback,base*(1-u),at);
+            read(lane.materials[row.index],dest,base*u,at);
+            read(lane.materials[lane.fallback],dest,base*(1-u),at);
           }
         }
-        for (let i=1;i<weights.length;i++) read(lane,dest,i-1,weights[i],at);
+        for (let i=1;i<weights.length;i++) read(lane.materials[i-1],dest,weights[i]*retained,at);
       }
       effects.finish(at,runFrame);
       desk.process(runFrame++,feeds);
@@ -143,7 +180,7 @@
     reset(plan,position,options.preroll!==false,options.monitor ?? null);
 
     const state=()=>({id:plan.session.id,sampleRate:rate,frames:plan.frames,revision,frame,scoreSample:position,pass,
-      loop:{...loop},warmupSamples:warmup,clippedFrames,monitor,taps:Object.keys(desk.taps),cache:{...cache},comp:plan.choices.map(row=>({...row})),
+      loop:{...loop},warmupSamples:warmup,clippedFrames,monitor,...(sound && {sound:soundInfo()}),taps:Object.keys(desk.taps),cache:{...cache},comp:plan.choices.map(row=>({...row})),
       lanes:Object.fromEntries(plan.lanes.map(name=>[name,{take:lanes[name].selected,takes:lanes[name].names.slice()}]))});
     function pull(frames,options={}) {
       check(integer(frames,1,16384) && fields(options,['taps']) &&
@@ -177,6 +214,7 @@
       const lane=lanes[command.lane], {take,fadeSamples=defaultFade}=command;
       check(integer(fadeSamples,0,rate/2),'A take fade needs up to half a second');
       if (take!==null) time.choice({lane:command.lane,take,from:samples(loop.from),to:samples(loop.to)});
+      if (sound?.lane===command.lane) setSound(null);
       if (lane.selected!==take) {
         const weights=readWeights(lane,frame).slice();
         lane.selected=take;
@@ -202,6 +240,7 @@
       for (const [lane,control] of Object.entries(lanes)) if (control.selected!==null)
         time.choice({lane,take:control.selected,from:samples(next.from),to:samples(next.to)});
       if (next.from===loop.from && next.to===loop.to) return state();
+      if (sound) setSound(null);
       if (position<next.from || position>=next.to) position=next.from;
       loop=next;
       pass=0;
@@ -211,17 +250,26 @@
     function applyPrepared(prepared) {
       const next=editor.materialize(prepared);
       const nextTime=timeline(next);
-      check(clockKey(next)===key,'Reopen the live transport after changing its tracks, clock or mixer routing');
+      const added=next.lanes.slice(plan.lanes.length);
+      const appended=added.length>0 && plan.lanes.every((name,index)=>name===next.lanes[index]) &&
+        added.every(name=>Object.hasOwn(next.session.audio ?? {},name) &&
+          !Object.hasOwn(plan.mixer.strips,name) && !Object.keys(next.mixer.strips[name]).length);
+      check(clockKey(appended ? {...next,lanes:plan.lanes} : next)===clockKey(plan),
+        'Reopen the live transport after changing its tracks, clock or mixer routing');
       let revised;
       if (signature(next.mixer)!==signature(plan.mixer)) {
-        revised=S.prepareSessionMixer(next.mixer,editor.assets,clock,undefined,editor.host);
+        revised=S.prepareSessionMixer(next.mixer,editor.assets,clock,undefined,editor.host,liveControl);
+        const order=report=>Object.keys(report.strips).filter(name=>report.strips[name].inserts.length);
+        check(signature(order(desk.report))===signature(order(revised.report)),'Reopen the live desk after changing insert order');
         revised.restore(desk.snapshot());
       }
       const resized={from:Math.min(loop.from,next.frames-1),
         to:loop.to===plan.frames ? next.frames : Math.min(loop.to,next.frames)};
       for (const [lane,control] of Object.entries(lanes)) if (control.selected!==null)
         nextTime.choice({lane,take:control.selected,from:samples(resized.from),to:samples(resized.to)});
+      for (const name of added) feeds[name]=[0,0];
       prepare(next);
+      if (sound) setSound(null);
       if (resized.from!==loop.from || resized.to!==loop.to) {
         loop=resized;
         if (position>=loop.to) position=loop.from;
@@ -246,7 +294,7 @@
       monitor=selection===null ? null : S.sessionMonitor(selection,desk.taps,plan.lanes);
       return state();
     }
-    return Object.freeze({pull,state,switchTake,setLoop,setMonitor,edit,keep:command=>edit([keepEdit(command)]),
+    return Object.freeze({pull,state,switchTake,setSound,setLoop,setMonitor,edit,keep:command=>edit([keepEdit(command)]),
       keepEdit,applyPrepared,inspect:()=>plan.report,
       trace:preview=>editor.trace(plan.session,preview),document:()=>P.data.freeze(plan.session)});
   };

@@ -52,9 +52,9 @@ const SpriteSurface = (() => {
     let x = 0, y = 0, shelf = 0;
     const entries = [], vertices = [];
     const regions = new WeakSet();
-    const faces = new Map(), sampling = [], shadowFaces = [], projections = [];
+    const faces = new Map(), sampling = [], shadowFaces = [], projections = [], charts = [];
     const geometry = typeof TexturedSurface !== 'undefined' ? TexturedSurface : require('./textured-surface.js');
-    function reserve(w, h, paint) {
+    function reserve(w, h, paint, { normal } = {}) {
       if (!Number.isInteger(w) || !Number.isInteger(h) || w < 1 || w > width || h < 1 ||
         paint !== undefined && typeof paint !== 'function')
         throw new RangeError('Expected bounded sprite dimensions and an optional paint function');
@@ -69,20 +69,48 @@ const SpriteSurface = (() => {
           throw new RangeError('Surface paint must return RGB hex or a transparent pixel');
         pixels.set([(ink >>> 16) & 255, (ink >>> 8) & 255, ink & 255, 255], (j * w + i) * 4);
       }
+      let normals;
+      if (typeof normal === 'function') {
+        normals = new Uint8Array(pixels.length);
+        for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+          const n = normal(i, j);
+          if (n == null) continue;
+          const vector = (Array.isArray(n) || ArrayBuffer.isView(n)) && n.length === 3 && Array.from(n);
+          if (!vector || !vector.every(Number.isFinite) || !vector.some(value => value !== 0))
+            throw new RangeError('Surface normal paint must return a finite, nonzero XYZ vector');
+          const scale = Math.max(...vector.map(Math.abs));
+          const unit = vector.map(value => value / scale);
+          const length = Math.hypot(...unit);
+          normals.set([...unit.map(value => Math.round(128 + 127 * value / length)), 255], (j * w + i) * 4);
+        }
+      } else if (normal !== undefined) {
+        if (!(normal instanceof Uint8Array || normal instanceof Uint8ClampedArray) || normal.length !== pixels.length)
+          throw new RangeError('A surface normal map needs a matching top-down RGBA raster');
+        normals = new Uint8Array(normal);
+      }
       const region = Object.freeze({ x: nextX, y: nextY, width: w, height: h });
       regions.add(region);
-      entries.push({ x: nextX, y: nextY, w, h, pixels });
+      entries.push({ x: nextX, y: nextY, w, h, pixels, normals });
       x = nextX + w;
       y = nextY;
       shelf = Math.max(nextShelf, h);
       return region;
     }
     function faceOptions(options = {}, surface, planar) {
-      const { id, sampling, projection, shadowShell, castsShadow = shadowShell !== undefined && shadowShell !== false } = options ?? {};
+      const { id, objectId = id, materialId, partId, sampling, projection, shadowShell, engraving,
+        castsShadow = shadowShell !== undefined && shadowShell !== false } = options ?? {};
       if (!options || ![Object.prototype,null].includes(Object.getPrototypeOf(options)) ||
-          Object.keys(options).some(key => !['id', 'sampling', 'projection', 'castsShadow', 'shadowShell'].includes(key)) ||
+          Object.keys(options).some(key => !['id', 'objectId', 'materialId', 'partId', 'sampling', 'projection', 'castsShadow', 'shadowShell','engraving'].includes(key)) ||
           id !== undefined && (typeof id !== 'string' || !id.trim() || faces.has(id)))
         throw new TypeError('A named surface needs a distinct nonempty ID and valid options');
+      if ([objectId,materialId,partId].some(value=>value!==undefined&&(typeof value!=='string'||!value.trim())))
+        throw new TypeError('Surface object, part, and material IDs must be nonempty strings');
+      if (partId!==undefined && objectId===undefined)
+        throw new TypeError('A named surface part needs an object ID');
+      const { restPoints }=surface;
+      if (restPoints!==undefined && (!(Array.isArray(restPoints)||ArrayBuffer.isView(restPoints)) ||
+        restPoints.length!==surface.points.length || !Array.from(restPoints).every(Number.isFinite)))
+        throw new RangeError('Surface restPoints need finite XYZ coordinates for each mesh vertex');
       if (typeof castsShadow !== 'boolean' || castsShadow && !planar)
         throw new TypeError('Painted shadow casters need a planar face and boolean castsShadow');
       if (shadowShell !== undefined && shadowShell !== false && !castsShadow)
@@ -91,9 +119,11 @@ const SpriteSurface = (() => {
       const style = projectionSettings(projection);
       if (style.subdivisions > 1 && vertices.length / 15 + surface.triangles.length / 3 * style.subdivisions ** 2 > 2000000)
         throw new RangeError('Surface projection exceeds the two-million-triangle subdivision budget');
-      return { id, rule: resampling.settings(sampling), castsShadow, shell, style };
+      const marks=engraving===undefined ? undefined : engraving===false ? false :
+        (typeof Engraving==='undefined' ? require('./engraving.js') : Engraving).prepare(engraving);
+      return { id, objectId, materialId, partId, rule: resampling.settings(sampling), castsShadow, shell, style, engraving:marks };
     }
-    function writeMesh(surface, region, { id, rule, castsShadow, shell, style }) {
+    function writeMesh(surface, region, { id, objectId, materialId, partId, rule, castsShadow, shell, style, engraving }) {
       const { x, y, width, height } = region;
       const { mapping, vertexSnap, subdivisions } = style;
       const first = vertices.length / 5, count = surface.triangles.length * subdivisions ** 2;
@@ -104,17 +134,23 @@ const SpriteSurface = (() => {
           bounds: Object.freeze([x, y, x + width - 1, y + height - 1]) }));
       if (castsShadow) shadowFaces.push(Object.freeze({ first, region, ...(shell && {shell}),
         ...(subdivisions > 1 && {subdivisions}) }));
-      const { points, uvs, triangles } = surface;
-      if (subdivisions === 1) for (const index of triangles) {
-        vertices.push(points[index * 3], points[index * 3 + 1], points[index * 3 + 2],
-          x + .5 + (width - 1) * uvs[index * 2], y + .5 + (height - 1) * uvs[index * 2 + 1]);
-      } else {
-        splitTriangles(surface, subdivisions, (a,b,c,wa,wb,wc) => {
-          const value = (data, stride, k) => data[a * stride + k] * wa + data[b * stride + k] * wb + data[c * stride + k] * wc;
-          vertices.push(value(points,3,0),value(points,3,1),value(points,3,2),
-            x + .5 + (width - 1) * value(uvs,2,0), y + .5 + (height - 1) * value(uvs,2,1));
-        });
+      const { points, uvs, triangles, restPoints } = surface;
+      const chartUV = width === 1 || height === 1 ? [] : null, rest = restPoints && [];
+      function vertex(value) {
+        const u=value(uvs,2,0), v=value(uvs,2,1);
+        vertices.push(value(points,3,0),value(points,3,1),value(points,3,2),
+          x+.5+(width-1)*u,y+.5+(height-1)*v);
+        chartUV?.push(u,v);
+        rest?.push(value(restPoints,3,0),value(restPoints,3,1),value(restPoints,3,2));
       }
+      if (subdivisions === 1) for (const index of triangles)
+        vertex((data,stride,k)=>data[index*stride+k]);
+      else splitTriangles(surface,subdivisions,(a,b,c,wa,wb,wc)=>{
+        vertex((data,stride,k)=>data[a*stride+k]*wa+data[b*stride+k]*wb+data[c*stride+k]*wc);
+      });
+      if (count) charts.push(Object.freeze({first,end:first+count,region,id,objectId,materialId,partId,
+        ...(engraving!==undefined && {engraving}),
+        ...(chartUV && {uv:Float32Array.from(chartUV)}),...(rest && {rest:Float32Array.from(rest)})}));
       return surface;
     }
     function mesh(surface, w, h, paint, options) {
@@ -151,10 +187,15 @@ const SpriteSurface = (() => {
     }
     function finish() {
       const height = Math.max(1, y + shelf), pixels = new Uint8Array(width * height * 4);
+      const normalPixels = entries.some(entry => entry.normals) ? new Uint8Array(pixels.length) : undefined;
       for (const e of entries) for (let row = 0; row < e.h; row++) {
-        pixels.set(e.pixels.subarray(row * e.w * 4, (row + 1) * e.w * 4), ((row + e.y) * width + e.x) * 4);
+        const start = row * e.w * 4, end = start + e.w * 4, target = ((row + e.y) * width + e.x) * 4;
+        pixels.set(e.pixels.subarray(start, end), target);
+        if (e.normals) normalPixels.set(e.normals.subarray(start, end), target);
       }
       const atlas = { width, height, pixels, vertices: Float32Array.from(vertices) };
+      if (charts.length) atlas.surfaceCharts = Object.freeze(charts.slice());
+      if (normalPixels) atlas.normalPixels = normalPixels;
       if (faces.size) namedFaces.set(atlas, new Map(faces));
       if (sampling.length) atlas.paletteSampling = sampling.slice();
       if (shadowFaces.length) atlas.shadowFaces = Object.freeze(shadowFaces.slice());

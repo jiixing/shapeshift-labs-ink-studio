@@ -143,6 +143,7 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     cidx = [],
     nrms = [];
   let footprintRecorder, engravingRanges;
+  let authoredSplats, authoredSplatIds;
   function describeEngraving(first,end,spec,frame) {
     if(first>=end||spec===undefined)return;
     const prepared=Engraving.prepare(spec);engravingRanges??=[];const last=engravingRanges.at(-1);
@@ -178,6 +179,16 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
       materialAlbedo = next;
     }
     materialAlbedo.fill(rgb + 1, first, end);
+  }
+  function keepSdf(sources) {
+    return source => {
+      for (const ranges of source.rows.values()) for (const range of ranges) {
+        const [start,end] = range, points = new Float32Array((end-start)*3);
+        for (let i=start;i<end;i++) points.set(data.subarray(i*16,i*16+3),(i-start)*3);
+        range.push(points);
+      }
+      sources.push(source);
+    };
   }
   function describeFootprint(first, end, definition, frame) {
     if (first >= end || definition === undefined) return;
@@ -284,7 +295,7 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     surfaceData = null,
     surfacePending = false,
     shadowLod;
-  const renderSdfs = [];
+  const renderSdfs = [], referenceSdfs = [];
   let bevelIds = new WeakMap();
   const surfaces = [],
     surfaceIds = new Map(),
@@ -411,6 +422,15 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     fine[o + 11] = 1;
   };
   function push(x, y, z, c00, c01, c02, c11, c12, c22, col, a, an, normal = null) {
+    if (an?.splatId !== undefined) {
+      const id = an.splatId;
+      authoredSplatIds ??= new Set();
+      if (!SplatProvenance.validId(id) || id.startsWith('rest:') || authoredSplatIds.has(id))
+        throw new RangeError('Authored splats need unique IDs outside the rest: namespace');
+      authoredSplatIds.add(id);
+      authoredSplats ??= [];
+      authoredSplats[n] = id;
+    }
     reserveRow();
     if (attrN) {
       if (!attr || attr.length < cap * 4) {
@@ -1057,7 +1077,8 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
       else fallingSnowRanges.push({ first, end });
     }
   }
-  let hasCurveSplats = false, curveGroups = 0, curveClips, curveMaterials, curveLighting, curveTiming, curvePattern, curveShadows;
+  let hasCurveSplats = false, curveGroups = 0, curveClips, curveMaterials, curveLighting, curveTiming, curvePattern, curveShadows,
+    curveShadowOptics, curveRest;
   const curveTimePrograms = [], curvePatternPrograms = [];
   const curveLod = [], curveStrands = [];
   let curveStations;
@@ -1070,7 +1091,8 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     storage.set(values, (n - 1) * stride);
     return storage;
   }
-  function curveSplat(from, to, radius, color, opacity, profile, edge, group, clips, finish, lighting, timing, pattern, shadows, station) {
+  function curveSplat(from, to, radius, color, opacity, profile, edge, group, clips, finish, lighting, timing, pattern, shadows, station,
+    shadowTransmittance, restMajor) {
     const { center, half, axis, normal, covariance } = CurveSplat.carrier(from, to, radius, profile);
     const section = profile ? (profile.flattened ? 2 : 1) : 0;
     push(...center, ...covariance, color, opacity,
@@ -1078,9 +1100,12 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     hasCurveSplats = true;
     const path = station ?? [curveStrands.push({ name: null, length: half * 2 }), 0, half * 2, half * 2];
     curveStations = writeCurveRow(curveStations, CurveSplat.stationStride, [...path, ...axis], Float64Array);
+    if (restMajor) curveRest=writeCurveRow(curveRest,16,[...center,half,...axis,radius,...restMajor,0,...restMajor,0],Float32Array);
     if (finish) curveMaterials = writeCurveRow(curveMaterials, CurveSplat.materialStride, finish);
     if (lighting) curveLighting = writeCurveRow(curveLighting, CurveSplat.lightingStride, lighting);
     if (shadows) curveShadows = writeCurveRow(curveShadows, 1, [shadows], Uint8Array);
+    if (shadowTransmittance !== undefined)
+      curveShadowOptics = writeCurveRow(curveShadowOptics, 1, [1+shadowTransmittance], Float32Array);
     if (timing) curveTiming = writeCurveRow(curveTiming, CurveSplat.timingStride, [...timing, ...axis], Float64Array);
     if (pattern) {
       const { program, arc, uv, side, gradient } = pattern;
@@ -1122,19 +1147,23 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
       {
         data: data.subarray(0, n * 16),
         count: n,
+        ...(authoredSplats && { splatIds: Object.freeze(Array.from({ length:n },(_,i) => authoredSplats[i] ?? null)) }),
         ...(hasCurveSplats && { curveSplats: true }),
         ...(curveStations && { curveStations: curveStations.slice(0, n * CurveSplat.stationStride), curveStrands: curveStrands.slice() }),
+        ...(curveRest && { curveRest:curveRest.slice(0,n*16) }),
         ...(curveMaterials && { curveMaterials: curveMaterials.slice(0, n * CurveSplat.materialStride) }),
         ...(curveLighting && { curveLighting: curveLighting.slice(0, n * CurveSplat.lightingStride) }),
         ...(curveTiming && { curveTiming: curveTiming.slice(0, n * CurveSplat.timingStride), curveTimePrograms: curveTimePrograms.slice() }),
         ...(curvePattern && { curvePattern: curvePattern.slice(0, n * CurvePattern.stride), curvePatternPrograms: curvePatternPrograms.slice() }),
         ...(curveShadows && { curveShadows: curveShadows.slice(0, n) }),
+        ...(curveShadowOptics && { curveShadowOptics: curveShadowOptics.slice(0,n) }),
         ...(curveLod.length && { curveLod: curveLod.slice() }),
         ...(curveClips && { curveClips: curveClips.slice(0, n * CurveSplat.clipStride) }),
         ...(paintDecals.length && { paintDecals }),
         ...(correctionRows.length && { paintCorrections: PaintCorrections.bind(correctionRows) }),
         renderMetadata: renderRows(),
         ...(renderSdfs.length && {renderSdfs:renderSdfs.slice()}),
+        ...(referenceSdfs.length && { referenceSdfs: referenceSdfs.slice() }),
         ...(precipitationRanges.length && { precipitationRanges: precipitationRanges.slice() }),
         ...(fallingSnowRanges.length && { fallingSnowRanges: fallingSnowRanges.slice() }),
         ...(materialAlbedo && { materialAlbedo: materialAlbedo.slice(0, n) }),
@@ -1210,10 +1239,11 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     n = 0;
     hasCurveSplats = false;
     curveGroups = 0;
-    curveClips = curveMaterials = curveLighting = curveTiming = curvePattern = curveShadows = undefined;
+    curveClips = curveMaterials = curveLighting = curveTiming = curvePattern = curveShadows = curveShadowOptics = undefined;
     curveTimePrograms.length = curvePatternPrograms.length = 0;
     curveLod.length = curveStrands.length = 0;
     curveStations = undefined;
+    curveRest = undefined;
     fine = null;
     attr = null;
     attrN = null;
@@ -1224,6 +1254,7 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     shadowLod = undefined;
     surfaces.length = 0;
     renderSdfs.length = 0;
+    referenceSdfs.length = 0;
     surfaceIds.clear();
     bevelIds = new WeakMap();
     bounced = 0;
@@ -1275,14 +1306,8 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     count: () => n,
     describeOptical,
     renderSdfSources: () => renderSdfs.slice(),
-    keepRenderSdf(source) {
-      for (const ranges of source.rows.values()) for (const range of ranges) {
-        const [start,end] = range, points = new Float32Array((end-start)*3);
-        for (let i=start;i<end;i++) points.set(data.subarray(i*16,i*16+3),(i-start)*3);
-        range.push(points);
-      }
-      renderSdfs.push(source);
-    },
+    keepRenderSdf: keepSdf(renderSdfs),
+    keepReferenceSdf: keepSdf(referenceSdfs),
     describeSplats: renderMetadata ? describeSplats : undefined,
     describeAlbedo,
     describePixelStyle,

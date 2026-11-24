@@ -168,7 +168,7 @@
     return P.data.freeze({production,themeMap,revision,report:{sections}});
   }
 
-  function createHistory(maps,duration,compiled) {
+  function createHistory(maps,duration,compiled,live=false,versionedThemes=new Set()) {
     const catalog=new Map(), indexes=new Map();
     for (const [name,map] of named(maps,32,'theme source')) {
       check(Object.hasOwn(compiled,name) && fields(map,['themes','appearances']) &&
@@ -203,16 +203,20 @@
             new Set(track.notes.map(note=>note.id)).size===track.notes.length,
             'Mapped theme performance must match the source notes');
           if (appearance.stage==='statement') check(track.count===identities.length,'A statement needs the complete theme');
-          for (const note of track.notes) if (Object.hasOwn(compiled[name].tracks,track.part)) hits.push({
-            appearance:appearance.id,theme:appearance.theme,stage:appearance.stage,
-            part:track.part,count:track.count,note:note.id,time:note.time
-          });
+          for (const note of track.notes) {
+            const event=performed[track.part].get(JSON.stringify([note.beat,note.time,note.midi]));
+            hits.push({appearance:appearance.id,theme:appearance.theme,stage:appearance.stage,
+              part:track.part,count:track.count,note:note.id,time:note.time,midi:note.midi,
+              ...(versionedThemes.has(appearance.theme)&&{onset:event.start??event.time,
+                off:Math.min(event.time+event.gate,event.choke??Infinity),velocity:event.velocity})});
+          }
         }
       }
       hits.sort(before);
       indexes.set(name,hits);
     }
     const pending=[], instances=new Map(), complete=[], heard=new Map();
+    const versions=versionedThemes.size?P.musicMotifRecall.history(indexes,compiled,versionedThemes):null;
     let cursor=0;
     const snapshot=()=>Object.fromEntries(Array.from(catalog,([theme,identities])=>{
       const state=heard.get(theme);
@@ -220,7 +224,9 @@
         counts:Object.fromEntries(stages.map(stage=>[stage,state?.counts[stage] ?? 0]))}];
     }));
     return {
+      ...(versions&&{versions}),
       add(placement) {
+        if(!live)versions?.schedule(placement,duration);
         const source=indexes.get(placement.source);
         if (!source?.length || !placement.gain) return;
         let lo=0,hi=source.length;
@@ -231,15 +237,18 @@
         }
         for (let i=lo; i<source.length && source[i].time<placement.to-epsilon;i++) {
           const hit=source[i], at=placement.at+Math.max(0,hit.time-placement.from);
+          if (placement.note && (placement.note.part!==hit.part || placement.note.midi!==hit.midi)) continue;
           if (!(placement.layers[hit.part] ?? 1) || at>=duration || at<cursor-epsilon) continue;
           check(pending.length<65536,'Theme playback exceeds its pending event budget');
           pending.push({...hit,time:round(at),segment:placement.segment ?? null,source:placement.source,
-            instance:JSON.stringify([placement.source,hit.appearance,round(placement.at-placement.from)])});
+            instance:JSON.stringify([placement.source,hit.appearance,placement.instance ?? round(placement.at-placement.from)]),
+            placement:placement.instance});
         }
       },
       at(time) {
         check(time>=cursor-epsilon,'Theme history must advance in playback order');
         cursor=time;
+        versions?.advance(time);
         pending.sort(before);
         let read=0;
         for (const hit of pending) {
@@ -248,7 +257,7 @@
           const state=heard.get(hit.theme) ?? {notes:new Set(),counts:{}};
           heard.set(hit.theme,state);
           state.notes.add(hit.note);
-          const instance=instances.get(hit.instance) ?? {parts:new Map(),completed:false};
+          const instance=instances.get(hit.instance) ?? {parts:new Map(),completed:false,placement:hit.placement};
           instances.set(hit.instance,instance);
           const notes=instance.parts.get(hit.part) ?? new Set();
           notes.add(hit.note);
@@ -256,11 +265,17 @@
           if (instance.completed || notes.size!==hit.count) continue;
           instance.completed=true;
           state.counts[hit.stage]=(state.counts[hit.stage] ?? 0)+1;
+          if (live && complete.length===64) complete.shift();
           complete.push({id:hit.appearance,theme:hit.theme,stage:hit.stage,part:hit.part,
             time:hit.time,segment:hit.segment,source:hit.source});
         }
         if (read) pending.splice(0,read);
         return snapshot();
+      },
+      finish(placement,time) {
+        this.at(time);
+        versions?.finish(placement);
+        for (const [key,instance] of instances) if (instance.placement===placement) instances.delete(key);
       },
       completed() {return complete.slice();}
     };

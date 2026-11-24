@@ -2,7 +2,7 @@
 
 Ink's WebGPU graph compiles a dependency graph of WGSL compute passes. A pass can read textures and buffers together and publish textures or buffers for other passes or for drawing. The GPU owns those resources between passes. Read them back explicitly when an authoring tool or export needs the bytes.
 
-The graph is an opt-in browser module. Request a WebGPU device from a secure origin such as HTTPS or localhost. The existing scene renderer still uses WebGL 2. WebGPU resources can feed a WebGPU render pass on the same device. To use their data in the WebGL renderer, read back the resource and upload it to the scene.
+The graph is an opt-in browser module. Request a WebGPU device from a secure origin such as HTTPS or localhost. Ink's full scene renderer uses WebGL 2. The WebGPU Gaussian renderer renders imported clouds directly on the device. WebGPU resources can feed a WebGPU render pass on the same device. To use their data in the WebGL renderer, read back the resource and upload it to the scene.
 
 ## Run the gallery
 
@@ -13,7 +13,7 @@ npm run build
 python3 -m http.server 8180 --bind 127.0.0.1
 ```
 
-Open [GPU Studies](http://127.0.0.1:8180/examples/webgpu-graphs/). Refraction generates and filters a texture. Change its channel shift or edit its WGSL and apply it live. Fold deforms a 16,641-vertex surface and shades it using the texture from Refraction. Pelagic opens sample PLY and SPZ assets or a local file and renders them through Ink's WebGL 2 pipeline. The [side-by-side viewer](../examples/live-gaussian/index.html) shares a camera between directional RGB and palette views.
+Open [GPU Studies](http://127.0.0.1:8180/examples/webgpu-graphs/). Refraction generates and filters a texture. Change its channel shift or edit its WGSL and apply it live. Fold deforms a 16,641-vertex surface and shades it using the texture from Refraction. Pelagic opens sample PLY and SPZ assets or a local file and renders them through Ink's WebGL 2 pipeline. The [side-by-side viewer](../examples/live-gaussian/index.html) shares a camera between directional RGB and palette views. [Pelagic Current](../examples/gaussian-gpu/index.html) shows GPU culling, projection, and sorting with a denser imported cloud and timing receipts.
 
 ## Compile a graph
 
@@ -111,7 +111,156 @@ renderer.render(world, { camera, gaussianColor: 'palette', width: 320, height: 2
 - **World conversion.** The decoder retains XYZ, scales, normalized XYZW rotation, opacity and SH coefficients in typed arrays. World conversion fits the cloud and packs each Gaussian's covariance for Ink's renderer. It uses DC color by default. Set `viewDirection: [x, y, z]` in source coordinates to bake the retained harmonics for a fixed viewing direction. Use a live color mode in WebGL to evaluate those coefficients during orbiting.
 - **Limits.** Decoding defaults to a four-million-point maximum. Hosts can pass a lower `maxPoints`. A file named `.gsz` must contain a recognized PLY or SPZ payload. Derivative's [Point File In reference](https://docs.derivative.ca/Point_File_In_POP) and [file-type table](https://docs.derivative.ca/File_Types) list `.spz` for this format.
 
-### Inspect a patch while orbiting
+### Render a cloud with GPU visibility
+
+The WebGPU renderer accepts a world from the PLY, SPZ, or GSZ decoder and
+draws its baked RGB into a WebGPU texture. Use the same orbit camera
+settings as the scene renderer. Set `viewDirection` in `gaussianSplatWorld`
+to bake directional color before upload. The WebGL viewer continues to
+offer live harmonic color, palette resolve, and its scene and material tools.
+
+```js
+import { createGaussianSplatRenderer, decodeGaussianSplat, gaussianSplatWorld } from './webgpu.mjs';
+
+const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice({
+  requiredFeatures: adapter.features.has('timestamp-query') ? ['timestamp-query'] : []
+});
+const format = navigator.gpu.getPreferredCanvasFormat();
+const context = canvas.getContext('webgpu');
+context.configure({ device, format, alphaMode: 'opaque' });
+const renderer = await createGaussianSplatRenderer(device, { format });
+
+const cloud = await decodeGaussianSplat(bytes, { maxPoints: renderer.maxSplats });
+renderer.setWorld(gaussianSplatWorld(cloud, { size: 6 }));
+const report = await renderer.render(context.getCurrentTexture(), {
+  yaw: .5, pitch: -.1, profile: true
+});
+console.log(report);
+```
+
+Upload a cloud once with `setWorld` and reuse it across camera moves. A
+compute pass projects the full covariance, checks the near and far planes
+and the projected three-sigma bounds, and compacts the survivors. A GPU
+depth sort orders that compact list back to front, breaking equal depths by
+original source index. The visible count limits both indirect sort dispatches
+and the indirect draw. The draw consumes the projected ellipses directly.
+The normal frame path transfers a 96-byte camera uniform and returns
+immediately after submitting commands.
+
+Request `profile: true` for a diagnostic frame. It reads back the count and
+optional timestamps. `sortCapacity` is the active padded count in the sort.
+The report lists the cloud bytes uploaded since the previous frame and the
+camera bytes separately with CPU enqueue timings. On a device created with
+`timestamp-query`, `gpuMs` gives distinct timings for projection and culling,
+sorting, and the raster pass including fragment shading and blending. Devices
+without timestamps return `gpuMs: null` with the same counts and upload data.
+Call `dispose()` when the renderer is no longer needed.
+
+### Filter Gaussian footprints on the art grid
+
+Set `gaussianFilter` on the frame or in `world.look` for headless, WebGL,
+and WebGPU renders. The WebGPU option also works with resident chunks.
+
+```js
+const gaussianFilter = { footprint: 'compensated', projection: 'ray', variance: 0.3 };
+renderer.render(context.getCurrentTexture(), { gaussianFilter });
+```
+
+- **Compensated footprint.** Add a pixel-scale Gaussian blur to the projected
+  covariance. Lower peak opacity by the square root of the old determinant
+  divided by the new determinant. This preserves the integrated contribution
+  of an isolated Gaussian before truncation and compositing. `variance`
+  defaults to .3 and is measured in native art-pixel squared units.
+- **Ray projection.** For each pixel, sample the Gaussian at its strongest
+  contribution along that camera ray between the near and far planes.
+  The three-sigma envelope sets the screen bounds. This keeps oblique and
+  close splats from inheriting the shape of a single center Jacobian. The
+  existing center-depth draw order still applies. Orthographic shots use
+  the affine projection.
+- Set either option independently. `footprint: 'legacy'` and
+  `projection: 'affine'` are the defaults. `variance: 0` evaluates an
+  unblurred footprint with an enabled option. The scene renderers
+  apply the profile to eligible Gaussian dabs. Authored footprint masks,
+  analytic curves, and continuous opaque surface coverage keep their
+  own rules.
+
+WebGPU accumulates compensated splat color in half precision before
+resolving to the output. WebGL uses half precision for its compensated
+color attachment when supported. Choose the target or art-grid size before
+rendering. For pixel-art delivery, enlarge the resolved grid by nearest
+neighbor.
+
+```sh
+node cli/ink-studio.js render examples/gaussian-filter-distant.js --w 224 --h 128 --px 1 --raw --gaussian-footprint compensated --out distant.png
+node cli/ink-studio.js render examples/gaussian-filter-close.js --w 224 --h 128 --px 1 --raw --gaussian-footprint compensated --gaussian-projection ray --out close.png
+```
+
+[Aster Relay](../examples/gaussian-filter/) compares both settings live on
+a 224 × 128 grid and lets you shift the camera across pixels. The filter
+uses the screen-space form of the Mip-Splatting footprint. The ray mode
+uses the closest point in whitened Gaussian space. [Mip-Splatting paper](https://arxiv.org/abs/2311.16493) · [Perspective-correct Gaussian evaluation](https://onlinelibrary.wiley.com/doi/full/10.1111/cgf.70014)
+
+### Stream Gaussian chunks
+
+Build a pack from a PLY, SPZ, or GSZ input.
+
+```sh
+node scripts/pack-gaussian-chunks.mjs scan.ply packs/scan 2 .2,.1,.05,0 6
+```
+
+The arguments after the destination are the spatial cell size, nested
+voxel sizes, fitted world size, and optional up axis. A final voxel size
+of zero keeps the original records. The packer groups samples into
+spatial chunks, matches the moments of each coarser voxel, and records the
+largest source-center displacement per tier. The `manifest.json` records
+bounds, levels, revisions, and chunk filenames. Its little-endian binary
+payloads contain the same 64-byte records as the imported Gaussian world.
+Serve the manifest and its files together over HTTP. Code can use
+`packGaussianChunks(world, { layer: index => 'foliage', ...settings })`
+to assign layer IDs before writing a pack.
+
+After creating a WebGPU renderer and loading Ink's browser toolkit:
+
+```js
+import { createGaussianChunkStream } from './webgpu.mjs';
+
+const url = new URL('./packs/scan/manifest.json', location.href);
+const manifest = await (await fetch(url)).json();
+const stream = createGaussianChunkStream(renderer, KIT, manifest, {
+  url,
+  budgetBytes: 6 * 1024 * 1024,
+  maxSplats: 70000,
+  projectedError: { targetPx: 3, hysteresis: .2 },
+  guardPixels: 16,
+  layers: { foliage: { maxSplats: 20000, splatsPerPixel: .6 } }
+});
+const report = await stream.render(context.getCurrentTexture(), { yaw: .5, profile: true });
+console.log(report.stream);
+```
+
+Advance by rendering frames as the camera moves and while the shot has
+pending loads. The renderer uploads each admitted chunk as it arrives,
+draws from the resident buffers, and sorts their visible splats together.
+The byte budget caps chunk buffers and in-flight reservations. The render
+report lists reusable projection and sort workspace separately as
+`workBytes`. The visible splat ceiling applies before GPU culling, so
+the profiled GPU visible count is at or below that ceiling. Call
+`stream.dispose()` before disposing the renderer.
+
+Run the [Glasswater Transect demo](../examples/gaussian-stream/) with:
+
+```sh
+npm run build
+node examples/gaussian-stream/prepare.mjs
+python3 -m http.server 8180 --bind 127.0.0.1
+```
+
+Open [Glasswater Transect](http://127.0.0.1:8180/examples/gaussian-stream/)
+and play the dolly or scrub the camera. The receipt shows the resident
+chunks, draw tiers, memory, visible splats, and per-layer limits.
+
+## Inspect a patch while orbiting
 
 In the [Pelagic viewer](../examples/live-gaussian/index.html), click either view
 or move the cursor with the arrow keys and press Enter. The marker follows the
@@ -177,11 +326,20 @@ framing and center pivot. The cutout uses splat coverage and reserves a separate
 transparent palette entry. JSON includes top-left tile rectangles, tile-local
 pivots in pixels, yaw angles in degrees and frame durations in seconds.
 
+Select **Bake normals** before building the preview to export a matching RGBA
+normal PNG. Inspect the normal colors or move the light in **Toon light**.
+The normal sheet stores view-space XYZ in RGB, with X right, Y up, and +Z toward
+the camera. Alpha zero marks a missing normal. Gaussian normals are estimates
+from the visible splats' covariance axes. Export coverage and a normal's alpha
+can differ where the visible splats lack a reliable surface axis.
+
 Hosts can call `renderer.captureTurntable(world, { angles, width, height, columns,
-fps, cutoff, pivot, frame })` for an imported live Gaussian world. `cutoff`
+fps, cutoff, pivot, frame, normals })` for an imported live Gaussian world. `cutoff`
 ranges from above zero to one and `pivot` is a world-space XYZ point.
 The result contains the shared indexed pixels and their metadata.
 `encodeGaussianTurntablePNG(sheet)` from `webgl.mjs` produces a PNG Blob
-from that same result.
+from that same result. With `normals: true`, the result also contains `normal`
+RGBA bytes in the same tile layout. Encode them with
+`encodeGaussianTurntableNormalPNG(sheet)`.
 
 Format references. [Graphdeco PLY implementation](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/scene/gaussian_model.py) · [Niantic SPZ](https://github.com/nianticlabs/spz) · [WebGPU specification](https://www.w3.org/TR/webgpu/)

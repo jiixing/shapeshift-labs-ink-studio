@@ -13,16 +13,7 @@
     };
   }
 
-  function resonator(rate,hz,t60) {
-    const r=Math.exp(Math.log(.001)/(t60*rate)), a=2*r*Math.cos(tau*Math.min(hz,rate*.45)/rate), b=r*r;
-    let y=0,z=0;
-    return input=>{
-      const out=input+a*y-b*z;
-      z=y;
-      y=out;
-      return out;
-    };
-  }
+  const {resonator}=InkContactPulse;
 
   const models={
     breath:{

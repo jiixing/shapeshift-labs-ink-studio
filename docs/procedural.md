@@ -1692,6 +1692,9 @@ brick data and remain readable.
   compiler samples its continuous field, applies the brick offsets and emits
   Gaussian splats at the resulting zero crossings.
 
+For live indexed scene geometry driven by sparse edits, see
+[Local SDF-to-mesh updates](brick-meshes.md).
+
 ### Traversal graph
 
 Pass aligned, nonoverlapping XZ span tiles to
@@ -2589,6 +2592,9 @@ collapse must preserve the local mesh link and avoid reversed or
 duplicate faces. Open boundaries and group seams are locked by
 default. Pass one owner, surface, and material record per face in
 `groups`. The result maps source vertices to surviving indices.
+Supply corner `uvs` to carry the authored atlas through reduction and
+lock UV seams, or set `protectedSeams` to pin specific geometric edges.
+[UV and seam inspection](mesh-uv.md) documents the diagnostics and CLI.
 
 `lod.mergeSplats(records, {ratio, target, maxDistance, maxRadius,
 viewDirections, silhouette, lockSeams, seamDistance, maxSeamPairs, maxPairs})`
@@ -3084,6 +3090,34 @@ For WebGL, call `renderer.renderStream(stream, cameraWorld, { place, portals, se
 `stream.snapshot()` exposes available entries and planned and drawable splat reservations per frame. A chunk shared by two views uses one byte reservation and counts toward the splat budget in both passes. `load(descriptor, { signal })` can complete asynchronously. Use `sizeOf` and `splatsOf` to measure custom payloads, and `release` to free resources on eviction. The scheduler holds cancelled jobs' reservations until they settle. A resident coarse level can stay visible while a more detailed version loads if both fit. `stream.ready()` waits for planned levels as frames continue to grant load starts. Inspect scheduler memory through `stats()` and call `dispose()` when done.
 
 The byte budget covers resident payloads and in-flight reservations. The frame budgets bound submitted packed splats and load starts, with two starts per frame by default. Assembled world copies, GPU textures, and renderer passes have their own costs. Use a worker-backed loader when individual builds need to run outside the rendering thread.
+
+#### Projected-error LOD and layer limits
+
+Pass `projectedError: { targetPx: 2, hysteresis: .2 }` and add `error` to
+each level of a chunk to choose by its projected error. Errors are in scene
+units and decrease from coarse to fine. A headless camera supplies
+`pixelHeight`. The browser supplies the frame height automatically.
+The planner estimates pixels per scene unit conservatively over the chunk
+bounds and uses the largest estimate across views. It picks the coarsest
+tier that meets the pixel target when the budgets allow, then requires error above the upper threshold to
+refine or below the lower threshold to coarsen. Chunks with `maxDistance`
+levels can be mixed with projected-error chunks.
+
+Give a chunk a `layer` ID and configure
+`layers: { foliage: { maxSplats: 12000, splatsPerPixel: .6 } }`.
+`maxSplats` caps planned and drawable splats in that layer across all views.
+`splatsPerPixel` caps a chunk's density against its projected bounding
+rectangle clipped to each view. That cap can reject the smallest tier if
+the screen footprint is too small. Selection can prefer extra detail
+within these budgets.
+
+Set `guardPixels` to keep existing or pending chunks just outside a view
+when memory permits. Guarded chunks count toward the byte budget and use
+no draws. Outside the guard their interest is released. Required views
+and visible fallback tiers have priority over guard retention.
+Frame receipts expose guarded bytes, planned and drawn splats by layer,
+and failed requests. The [WebGPU Gaussian stream](webgpu-graphs.md#stream-gaussian-chunks)
+uses the same planner with per-chunk GPU buffers.
 
 Contact curves follow the input mesh resolution. `contacts.index` can restrict
 the index to named surface groups and exposes bounds queries and segment

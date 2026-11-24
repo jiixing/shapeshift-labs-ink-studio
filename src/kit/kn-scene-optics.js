@@ -8,6 +8,7 @@
   K.clouds = CloudField;
   K.reflection = {
     detail: ReflectionDetail,
+    proxy: ReflectionProxy,
     plane: SceneOptics.plane,
     probe: ReflectionProbes.probe,
     reflectedView: SceneOptics.reflectedView,
@@ -20,7 +21,7 @@
     }
   };
   K.ripple = { field: RippleField.field, sampleFrame: RippleField.sampleFrame, glsl: RippleField.glsl };
-  K.optical = Object.freeze({ material: OpticalMaterials.material, frame: OpticalMaterials.frame });
+  K.optical = Object.freeze({ material: OpticalMaterials.material, frame: OpticalMaterials.frame, stride: OpticalMaterials.STRIDE });
   K.atmosphere = {
     fog: SceneOptics.fog,
     sphere: SceneOptics.sphere,

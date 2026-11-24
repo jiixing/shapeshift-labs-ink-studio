@@ -19,7 +19,7 @@ export function captureStreamingCamera(world, frame, width, height) {
   const { camera } = snapshots.get(snapshot);
   const { eye, back } = snapshot.pose;
   return { snapshot, camera: { ...snapshot.pose, ortho: camera.ortho, tangent: camera.tangent, aspect: camera.aspect,
-    near: camera.clipNear, far: camera.clipFar, observer: eye.map((v, i) => v - back[i] * camera.setback) } };
+    near: camera.clipNear, far: camera.clipFar, pixelHeight: height, observer: eye.map((v, i) => v - back[i] * camera.setback) } };
 }
 
 export function makeCamera(world, frame, width, height) {
@@ -62,9 +62,12 @@ export function cameraPose({ eye, view }) {
     up: [view[1], view[5], view[9]], back: [view[2], view[6], view[10]] };
 }
 
-export function withCameraPose(camera, pose) {
-  const checked=cameraLens.pose(pose);
-  return {...camera,eye:checked.eye,view:new Float32Array(cameraLens.matrix(checked))};
+export function withCameraPose(camera, pose, reflected = false) {
+  // Validate a proper camera pose, then restore the handedness of the mirror.
+  const checked = cameraLens.pose(reflected ? { ...pose, right: pose.right.map(x => -x) } : pose);
+  const view = new Float32Array(cameraLens.matrix(checked));
+  if (reflected) for (const column of [0, 4, 8, 12]) view[column] = -view[column];
+  return { ...camera, eye: checked.eye, view };
 }
 
 function placedDepth(row, i, project) {
@@ -90,7 +93,7 @@ function depthBounds(row, view) {
 export function createDepthSorter() {
   const counts = new Uint32Array(65536);
   let depth, keys, order;
-  return function sort(world, view, time, instances, placements, stabilize, rainClocks = [time,time], rainWind = [0,0]) {
+  return function sort(world, view, time, instances, placements, stabilize, rainClocks = [time,time], rainWind = [0,0], eye) {
     const { count, data } = world;
     const stride = instances ? 2 : 1;
     const total = count + (instances?.reduce((sum,row) => sum + row.asset.count, 0) ?? 0);
@@ -101,7 +104,9 @@ export function createDepthSorter() {
     }
     if (!order || order.length < total * stride) order = new Int32Array(depth.length * stride);
     const m2 = view[2], m6 = view[6], m10 = view[10], m14 = view[14];
-    const project = (x, y, z) => m2 * x + m6 * y + m10 * z + m14;
+    const project = eye && world.gaussianSort === 'cameraDistance' ?
+      (x,y,z) => -((x-eye[0])**2 + (y-eye[1])**2 + (z-eye[2])**2) :
+      (x,y,z) => m2*x + m6*y + m10*z + m14;
     for (let i = 0, o = 0; i < count; i++, o += 16)
       depth[i] = project(data[o], data[o + 1], data[o + 2]);
     for (const i of world.moving ?? []) {

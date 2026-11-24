@@ -58,7 +58,7 @@
         clamp((.48*rate/upper-params.ratio)/Math.max(1,params.ratio));
       const gain=Math.pow(note.velocity,.78), salt=note.salt;
       const spread=2**(params.width/1200)-1;
-      return {duration:gate+e.release,signal(t,frame){
+      return {duration:gate+e.release,extendGate(next){gate=next;return gate+e.release;},signal(t,frame){
         const turn=phase(note,t), transient=Math.exp(-t/params.indexDecay);
         const fm=sin(turn+sin(turn*params.ratio)*index*(.13+.87*transient)/tau);
         const harmonics=sin(2*turn+.07)*.53*clamp((.5-2*upper/rate)*12)+
@@ -86,7 +86,7 @@
       const partial=(ratio,gain)=>gain*clamp((.5-note.frequency*(note.expression?.pitchMax ?? 1)*ratio/rate)*12);
       const second=partial(1.999,.20*p.tine), third=partial(3.998,.38*p.bite*brightness);
       const strike=partial(6.84,.26*p.bite*brightness);
-      return {duration:gate+e.release,signal(t,frame) {
+      return {duration:gate+e.release,extendGate(next){gate=next;return gate+e.release;},signal(t,frame) {
         const turn=phase(note,t)+p.wear*.042*(1-Math.cos(tau*.84*t));
         const body=.8*sin(turn)+second*sin(turn*1.999+.063)*Math.exp(-t*3.4);
         const hammer=strike*sin(turn*6.84)*Math.exp(-t*35)+third*sin(turn*3.998)*Math.exp(-t*10);
@@ -152,13 +152,13 @@
         finite(loopFade,0,loop ? (loop[1]-loop[0])*.5 : 0),'Invalid sampler zone');
       const buffers=samples.map(name=>assets[name]);
       check(!loop || buffers.every(b=>loop[1]*b.sampleRate<=b.samples.length/b.channels),'Sample loop is outside the asset');
-      return {buffers,levels:levels?.map(db),root:root===undefined ? null : H.midi(root),low,high,
+      return {buffers,samples,levels:levels?.map(db),root:root===undefined ? null : H.midi(root),low,high,
         velocity,articulation,oneShot,tune,gain:db(gain),loop,loopFade};
     });
     return {prepare(note,rate,gate) {
-      const midi=note.midi, articulation=note.play.articulation;
-      const matching=zones.filter(z=>midi>=z.low && midi<=z.high && note.velocity>=z.velocity[0] &&
-        note.velocity<=z.velocity[1] && (z.articulation===undefined || z.articulation===articulation));
+      const {midi,zoneVelocity:velocity=note.velocity}=note, articulation=note.play.articulation;
+      const matching=zones.filter(z=>midi>=z.low && midi<=z.high && velocity>=z.velocity[0] &&
+        velocity<=z.velocity[1] && (z.articulation===undefined || z.articulation===articulation));
       const zone=matching.find(z=>articulation!==undefined && z.articulation===articulation) ?? matching[0];
       if (!zone) return {duration:0,signal:()=>0};
       const alternate=note.roundRobin%zone.buffers.length;
@@ -177,7 +177,12 @@
         const current=samples[at*channels+ch], next=samples[(at+1)*channels+ch] ?? 0;
         return current+(next-current)*blend;
       };
-      return {duration,stereo:channels===2,signal(t,frame,channel) {
+      return {duration,asset:zone.samples[alternate],stereo:channels===2,
+        ...(!zone.oneShot && {extendGate(next){
+          if (!zone.loop && next>span) return null;
+          gate=next;
+          return zone.loop ? gate+e.release : Math.min(span,gate+e.release);
+        }}),signal(t,frame,channel) {
         let pos=offset+(travel?.(t) ?? t)*ratio*sampleRate;
         if (zone.loop && pos>=end)
           pos=fade ? start+fade+(pos-end)%(end-start-fade) : start+(pos-start)%(end-start);
@@ -266,7 +271,7 @@
 
   function express(player,note,rate,gate,phraseOffset=0) {
     const authoredGate=(note.gate ?? gate)+(note.start===undefined ? 0 : note.time-note.start);
-    const expression=P.musicNoteExpression.compile(note.play.curves,Math.max(gate,authoredGate),rate,note.phrase,phraseOffset);
+    const expression=note.expression ?? P.musicNoteExpression.compile(note.play.curves,Math.max(gate,authoredGate),rate,note.phrase,phraseOffset);
     const body=player.prepare(expression ? {...note,expression} : note,rate,gate);
     const fadeIn=note.performance?.fadeIn;
     if (!expression?.gain && !expression?.filter && !expression?.roughness && !fadeIn) return body;
@@ -294,7 +299,8 @@
       const start=note.start ?? note.time;
       if (!release || note.suppressRelease || (note.choke ?? Infinity)<=start+gate+1e-8) return body;
       const tail=express(player,{...note,performance:null,gate:.075,start:undefined,roundRobin:release.roundRobin,
-        zoneArticulation:note.play.articulation ?? raw.defaultArticulation,zoneVelocity:note.velocity,velocity:clamp(note.velocity*release.level),
+        zoneArticulation:note.play.articulation ?? raw.defaultArticulation,zoneVelocity:note.zoneVelocity ?? note.velocity,
+        velocity:clamp(note.velocity*release.level),
         play:{articulation:release.articulation,curves:release.curves}},rate,.075,gate);
       if (!tail.duration) return body;
       const stereo=body.stereo || tail.stereo, releaseFrame=Math.ceil(gate*rate-1e-7);

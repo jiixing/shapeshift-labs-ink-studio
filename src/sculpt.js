@@ -83,6 +83,7 @@ function makeSculpt(B, rest) {
     res: 0.09,
     adaptiveSampling: false,
     keepRenderSdf: false,
+    keepReferenceSdf: false,
     sun: norm([-0.5, 0.8, 0.45]),
     amb: 0.14,
     sky: 0.26,
@@ -1679,18 +1680,59 @@ function makeSculpt(B, rest) {
     fieldAll(x,y,z);
     return {body:own, owner:ownNeg?.mat?.r ? ownNeg : own};
   };
-  let renderSdf;
+  let renderSdf, referenceSdf;
   function captureRenderSdf() {
     const positive = pos.filter(p => !p.whole && Number.isFinite(p.br) && p.br < 1e8 && SdfAssist.opaque(p.mat));
     if (!positive.length) return null;
-    const field = makeSculpt(B,{positive,negative:neg.slice()});
-    const bounds = field.modelBounds(.05);
-    field.ready();
+    const negative = neg.slice();
     const rows = new Map();
-    const owners = new Set([...positive,...neg.filter(p=>SdfAssist.opaque(p.mat))]);
+    const owners = new Set([...positive,...negative.filter(p=>SdfAssist.opaque(p.mat))]);
     const {pre,clip} = S;
     const accepts = (pre || clip) && ((x,y,z)=>(!pre || pre(x,y,z)) && (!clip || clip(x,y,z)));
-    return { bounds, distance:field.sdf, locate:field.renderSurface, rows, owners, accepts };
+    function bind(body, cut) {
+      const selected = positive.filter(body);
+      if (!selected.length) return null;
+      const field = makeSculpt(B,{positive:selected,negative:negative.filter(cut)});
+      field.ready();
+      return {bounds:field.modelBounds(.05), distance:field.sdf, locate:field.renderSurface, accepts};
+    }
+    return { ...bind(()=>true,()=>true), bind, rows, owners, negative };
+  }
+  function captureReferenceSdf() {
+    const finite = p => !p.whole && Number.isFinite(p.br) && p.br < 1e8 && !p.mat.skip;
+    const bodies = pos.filter(finite), separate = ghosts.filter(finite);
+    const cuts = neg.slice();
+    const {pre,clip} = S;
+    const accepts = (pre || clip) && ((x,y,z) => (!pre || pre(x,y,z)) && (!clip || clip(x,y,z)));
+    const rows = new Map([...bodies, ...cuts, ...separate].map(owner => [owner, []]));
+    const isPane = mat => mat.optical || mat.glass || mat.a < 1 ||
+      Object.values(mat.surface?.layers ?? {}).some(layer => layer?.type === 'transmission') ||
+      mat.top && isPane(mat.top);
+    function bind(allowed, cutsAllowed = allowed) {
+      const solids = [], panes = [];
+      for (const owner of bodies) if (allowed(owner)) (isPane(owner.mat) ? panes : solids).push(owner);
+      const activeCuts = cuts.filter(cutsAllowed);
+      function source(positive, negative) {
+        const field = makeSculpt(B, { positive, negative });
+        field.ready();
+        const bounds = field.modelBounds(.025);
+        return { bounds, distance: field.sdf, accepts, surface(point, normal) {
+          const hit = field.renderSurface(...point), owner = hit.owner;
+          if (!owner) return null;
+          const base = controlled(S.materialAt(owner.mat, point, normal));
+          const top = base.top && normal[1] > base.top.min +
+            .35 * (n3(point[0]*1.9, point[1]*1.9, point[2]*1.9) - .5);
+          return { owner, material: top ? base.top : base };
+        } };
+      }
+      return [
+        ...(solids.length ? [source(solids, activeCuts)] : []),
+        ...panes.map(owner => source([owner], activeCuts)),
+        ...separate.filter(allowed).map(owner => source([owner], []))
+      ];
+    }
+    const lighting = { direction: S.sun, intensity: S.sunK, ambient: S.amb, shadows: true, lights: S.lights.slice() };
+    return bodies.length || separate.length ? { rows, bind, lighting, negative:cuts } : null;
   }
   S.solidCount = () => pos.length + neg.length;
   S.add = add;
@@ -1803,7 +1845,7 @@ function makeSculpt(B, rest) {
     const collectEngraving=material.engraving!==undefined||material.top?.engraving!==undefined||S.engraving!==undefined;
     const collectPrint=material.screenPrint!==undefined||material.top?.screenPrint!==undefined||S.screenPrint!==undefined;
     const collectStyle = B.describePixelStyle && (material.pixelStyle || material.top?.pixelStyle);
-    if (!renderSdf && !capture && !B.describeSplats && !collectStyle && !collectFootprint && !collectEngraving && !collectPrint && !material.optical && !material.top?.optical) return light(material, ...sample, undefined, fine);
+    if (!renderSdf && !referenceSdf && !capture && !B.describeSplats && !collectStyle && !collectFootprint && !collectEngraving && !collectPrint && !material.optical && !material.top?.optical) return light(material, ...sample, undefined, fine);
     const first = B.count();
     let effective = material, style, pair;
     if (material.top || collectStyle || collectFootprint || collectEngraving || collectPrint) light(material, ...sample, (used, settings, shades) => {
@@ -1813,6 +1855,11 @@ function makeSculpt(B, rest) {
     }, fine);
     else light(material, ...sample, undefined, fine);
     const end = B.count();
+    const referenceRows = referenceSdf?.rows.get(owner);
+    if (referenceRows && first < end) {
+      if (referenceRows.at(-1)?.[1] === first) referenceRows.at(-1)[1] = end;
+      else referenceRows.push([first,end]);
+    }
     if (first < end && renderSdf?.owners.has(owner) && SdfAssist.opaque(effective)) {
       if (!renderSdf.rows.has(owner)) renderSdf.rows.set(owner,[]);
       const ranges = renderSdf.rows.get(owner);
@@ -2129,6 +2176,8 @@ function makeSculpt(B, rest) {
     const sampling = !S.capture && SculptSampling.prepare(override ?? S.adaptiveSampling);
     const keepSdf = S.keepRenderSdf || (typeof globalThis !== 'undefined' && globalThis.INK_RETAIN_RENDER_SDF);
     renderSdf = keepSdf && !S.capture && B.keepRenderSdf ? captureRenderSdf() : null;
+    const keepReference = S.keepReferenceSdf || (typeof globalThis !== 'undefined' && globalThis.INK_RETAIN_REFERENCE_SDF);
+    referenceSdf = keepReference && !S.capture && B.keepReferenceSdf ? captureReferenceSdf() : null;
     if(S.stipple&&S.stipple!==true&&(typeof S.stipple!=='object'||Array.isArray(S.stipple)))throw new TypeError('Stippling needs a boolean or settings');
     stippleProfile=Stippling.prepare(S.stipple ? {light:S.sun,ambient:S.amb,...(S.stipple===true?{}:S.stipple)} : S.stipple);stippleCandidates=stippleProfile&&!S.capture?[]:null;stippleProbes=0;
     buildGrid();
@@ -2193,6 +2242,8 @@ function makeSculpt(B, rest) {
       B.keepRenderSdf(source);
     }
     renderSdf = null;
+    if (referenceSdf) B.keepReferenceSdf(referenceSdf);
+    referenceSdf = null;
     layInstances();
     bevelSculpt = undefined;
     bevelMaterials.clear();

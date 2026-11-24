@@ -18,6 +18,10 @@ Use `--attachments <files.json>` to carry host-managed resources such as audio c
 
 `project.scene()` returns editable scene data with typed data sources ready to use. `project.snapshot()` returns the portable file document. Use `project.files()`, `project.readFile(path)`, and `project.attachment(id)` to access retained files. A version 1 bundle opens as a diorama in the CLI, editor, and browser.
 
+[Agent-driven project authoring](agent-projects.md) uses the version 1 diorama
+bundle to inspect frames and apply coordinated changes to scene materials,
+layered pixel art, timeline keys, and sound cues.
+
 ## Bundle a whole take
 
 A native [take](take-clock.md) is the entry in a version 2 project bundle.
@@ -84,3 +88,7 @@ checks against the packaged files on the pinned engine.
 ## Exchange story packs and recorded runs
 
 A version 4 bundle carries definitions, capability declarations, pinned assets, inputs, and optional media. A run bundle also retains a recorded event log and can include native replay data. The same bundle opens in the story event and cue tools. [Portable story packs and run bundles](portable-story-packs.md)
+
+A take's soundtrack can import [portable world-sound packs](world-sound-packs.md)
+from files inside the project root. Packing the take verifies those imports
+and carries the self-contained sound packs into the relocated project.

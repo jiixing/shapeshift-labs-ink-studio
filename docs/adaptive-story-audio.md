@@ -13,6 +13,41 @@ The command verifies native replay and writes aligned stereo WAVs plus `report.j
 
 The report records section entries, sampled layer gains, cue onset and arrival samples, heard position, and the final sampled position of a following cue. Cue rows carry the committed beat ID and original timecode. `ink-studio beat ID mix/report.json` finds the associated stem and sample metadata. Soundtrack assets use the existing [scene audio format](scene-audio.md), including WAV files, pinned assets, graphs and editorial sessions. The recording supplies the soundtrack world.
 
+## Inspect playback by beat
+
+`story audio` writes `playback.json` with one receipt per routed story cue
+or stinger, including separate compound and velocity layers. The receipt
+keeps the committed beat ID, the chosen asset and variant, the rendered bus,
+and the source selector and position. Following cues also report the source
+position when playback begins.
+
+| Field | Meaning |
+| --- | --- |
+| `requestedSample` | The original cue onset on the absolute scene sample clock. |
+| `plannedSample` | The requested sample plus any authored layer delay and acoustic propagation. |
+| `observedSample` | The simulation tick at which the renderer received the cue, expressed on the same sample clock. Offline replay can reconstruct an onset earlier in that tick. |
+| `actualSample` | The first mixer sample with admitted playback, or `null` when the cue never enters its bus. An admitted sample can still carry source silence or an authored attack. |
+| `lateBySamples` | The difference between actual and planned onset, or `null` when playback never begins. |
+| `fileSample` | The onset offset inside the exported WAV when that onset falls inside the print window. |
+
+`outcome` records played, late, dropped, muted, or outside-window. A dropped
+receipt can include a voice or group limit, reserved capacity, or an authored
+stinger hold. A played cue can also record a later `stolenAt` sample. The
+existing `receipts.json` preserves sound choices for replay. Use
+`--receipts` with that file to reproduce the chosen sounds and regenerate
+their playback receipts. Use [directional sound captions](directional-captions.md) to turn the admitted cues into a WebVTT track.
+
+```sh
+ink-studio beat ink:beat:switchyard/main/30.0 mix/playback.json
+node examples/audio-playback-receipts/demo.cjs ./switchyard
+```
+
+In **Switchyard**, the cart is requested at 1.50 s and enters the Foley bus
+at 2.25 s when it comes into range. The same playhead continues from the
+original request. At 3.60 s, two of three basket impacts lose their slot.
+The receipt for each request keeps its beat link and outcome. Story
+editorial uses the actual samples for its playback markers.
+
 ## Drive a layer from sustained pressure
 
 Use a named parameter on the world’s `adaptive-music` system. This parameter reads the committed danger allocation in the incident scheduler.
@@ -69,3 +104,44 @@ node examples/adaptive-story-audio/demo.cjs /tmp/crossing-watch-review
 In **Crossing Watch**, the incident holds danger from the rescue call to docking. Listen for the pulse growing inside the first section, the score change on the bar at 4 seconds, a ferry motif on the beat at 5 seconds, and the return to the watch at 10 seconds.
 
 **Source Sweep** isolates the 5–7.35 second window. Listen to the Foley stem in stereo as a single rope cue follows the same ferry socket from left to right. Its location and originating beat are recorded in the report.
+
+## Audition a recorded world cue
+
+Open a local looping player from a committed beat in a native recording
+or run bundle. Find a beat in the soundtrack report or the committed
+event log.
+
+```sh
+ink-studio story audition workshop.run.json workshop.audio.json \
+  --beat ink:beat:audition-workshop/main/16.0 --from .35 --to 2.05
+```
+
+Open the loopback URL printed by Ink and press **Play loop**. The default
+loop starts a quarter second before the cue and ends 1.5 seconds after
+it, within the recording's coverage. Supply `--from` and `--to` to
+include more of the interaction. The loop accepts up to 12 seconds.
+Use `--receipts` to start from saved sound choices instead of generating
+them again.
+
+Choose a routed binding or the entire beat. The family menu uses the
+soundtrack's named families and evaluates takes against the recorded
+interaction, including its context and velocity measurement. A swap
+uses the original cue's position, acoustic path, and bus. The new take
+supplies its asset, gain, and pitch. Gain in dB and high-pass or low-pass
+cutoffs affect the selected cue. Blank filter fields use the scene's
+settings. The scene still applies its own acoustic occlusion.
+
+The complete soundtrack renders for each change, including the beds,
+other world cues, music, and post. The player keeps looping the current
+mix while the new one renders. A finished revision enters at a loop
+boundary. The player adds a 4 ms fade at each loop edge. Select
+**Original mix** to restore the authored sound. Audition edits live in
+the player session.
+
+The demo replays one wrench impact with its original wood family, a
+metal family, a quieter level, and a low-pass filter. Listen for the
+room tone, relay, and second impact across all four passes.
+
+```sh
+node examples/world-cue-audition/demo.cjs /tmp/world-cue-audition
+```

@@ -53,9 +53,30 @@ function locate(api,beatId,files,base,timing) {
             if(Number.isFinite(value))context[key]=value;
           if(typeof row.status==='string')context.status=row.status;
           if(typeof row.output==='string')context.output=row.output;
+          const playback=format==='ink-studio/audio-playback-receipts' && /^\/receipts\/\d+$/.test(pointer) ? row : row.playback;
+          if (Number.isSafeInteger(playback?.requestedSample)) {
+            const {requestedSample,plannedSample,observedSample,actualSample,lateBySamples,fileSample,outcome,reason,bus,variant,
+              spatialSource,voiceBudget}=playback;
+            context.audio={requestedSample,plannedSample,observedSample,actualSample,lateBySamples,outcome,bus,variant,
+              spatialSource,...(fileSample!==undefined&&{fileSample}),...(reason!==undefined&&{reason}),
+              ...(voiceBudget!==undefined&&{voiceBudget})};
+          }
           if (format === 'ink-studio/patch-show-report' && /^\/storyDiagnostics\/findings\/\d+$/.test(pointer)) {
             const { kind, fromFrame, toFrame, source, channel, stage } = row;
             context.diagnostic = { kind, fromFrame, toFrame, source, channel, stage };
+            if (['missed-audio-cue','audio-underrun','late-musical-join'].includes(kind)) {
+              const {fromSample,toSample,sampleRate,sourceReport,sourcePointer,cue,resource,reason,status}=row;
+              context.diagnostic={...context.diagnostic,fromSample,toSample,sampleRate,sourceReport,sourcePointer,
+                cue,resource,reason,status};
+            }
+          }
+          if (format==='ink-studio/music-path-comparison' && /^\/(cues|transitions|layers)\/\d+$/.test(pointer)) {
+            const {input,requestedSample,arrivalSample,onsetDeltaSamples,live,offline,variantStatus,tail}=row;
+            const playbackPath=value=>({status:value?.status,sample:value?.sample,
+              ...(Number.isSafeInteger(value?.startSample) && {startSample:value.startSample,endSample:value.endSample})});
+            context.audioComparison={input,sampleRate:document.sampleRate,requestedSample,arrivalSample,onsetDeltaSamples,
+              variantStatus,live:playbackPath(live),offline:playbackPath(offline),
+              ...(tail && {directReleaseDeltaSamples:tail.directReleaseDeltaSamples})};
           }
           if(local(row.file))context.file=row.file;
           if(local(row.frameFolder))context.frameFolder=row.frameFolder;

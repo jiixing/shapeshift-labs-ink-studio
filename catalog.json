@@ -307,6 +307,28 @@
       "example": "demos/labscenes.js sceneBench (the beetle)"
     },
     {
+      "id": "anim.motion-matching",
+      "kind": "rig",
+      "status": "ready",
+      "title": "Motion matching for procedural foot rigs",
+      "what": "Index entry poses by foot contact, swing phase, velocity, and intended heading. On a steering change, retain planted contacts and redirect the swing from its current position and velocity.",
+      "use": "K.gait({ feet, motionMatching: true })",
+      "where": "src/kit/k3-motion-matching.js, docs/motion-matching.md",
+      "example": "examples/motion-matching/index.html",
+      "tags": ["walk", "locomotion", "steering", "procedural rig", "motion matching"]
+    },
+    {
+      "id": "anim.view-poses",
+      "kind": "rig",
+      "status": "ready",
+      "title": "View-specific pose corrections",
+      "what": "Swing elbows or move a held prop in a camera sector. Blend corrections around the orbit with locked foot plants and shared prop grips in live views and directional sprites.",
+      "use": "puppet.viewPoses.set(asset), or render/atlas --view-poses asset.json",
+      "where": "src/kit/kj-view-poses.js, docs/view-poses.md",
+      "example": "examples/view-poses/index.html",
+      "tags": ["puppet", "pose", "orbit", "contact", "grip", "sprite"]
+    },
+    {
       "id": "sdf.ops",
       "kind": "op",
       "status": "ready",

@@ -176,6 +176,8 @@ consume the resulting rasters as regular input slots. Run
 `node examples/deep-composite.cjs tide-archive.html` for a preview of the
 transmission, reflection and fog rasters from one scene.
 
+Use [Deep OpenEXR export](deep-openexr.md) to take these native per-pixel samples into a deep compositor.
+
 ## Layered exports
 
 `ink-studio export-layers <scene> --t 0,1,2 --out directory` writes numbered image sequences and a `layers.json` manifest. Use the usual camera and render options and set `--w` and `--h` for the output size. Use `--px1` to keep the renderer's native color grid. A single frame at time zero is the default. Use `--from`, `--to`, and `--n` for evenly spaced samples.
@@ -308,7 +310,7 @@ const ink = {
 };
 ```
 
-`distance` measures scene units along the view axis from the authored camera in either projection. A line stays at full strength through `near` and disappears at `far`. Put the range on `ink`, a material, or a target to apply it to all three line types there. A line's own range takes precedence. Use equal values for a hard cutoff or `distance: false` to clear an inherited range. Set a line to `false` to turn it off at every depth.
+`distance` measures scene units along the view axis from the authored camera in either projection. Ink stays at full strength through `near` and disappears at `far`. Put the range on `ink`, a material, or a target to apply it to all treatments there. A treatment's own range takes precedence. Use equal values for a hard cutoff or `distance: false` to clear an inherited range. Set a treatment to `false` to turn it off at every depth.
 
 Use `--ink file.json` to apply a standalone ink profile through the CLI or `--ink off` to disable selective ink. The [aqueduct courier scene](../examples/selective-ink.js) shows a colored character contour in front of stonework that loses its ink over distance.
 
@@ -374,6 +376,65 @@ lantern hand distinct while letting the cloak and far aqueduct soften.
 Author the profile in `finish.look.ink` or override it for a shot with
 `--ink file.json`. Use `--ink off` to bypass selective ink.
 
+### Material ink and shot overrides
+
+In the headless renderer, assign `materials` rules by authored material ID.
+Each material can specify its own silhouette, crease, boundary, shadow edge,
+and hatch. These rules share the same native art grid across splats, indexed
+meshes, and direct SDF surfaces.
+
+```js
+const ink = {
+  light: [-.58, .52, .60],
+  materials: {
+    skin: { silhouette: { color: '#97585e', strength: .4 }, crease: false },
+    metal: {
+      silhouette: { shadow: '#342a39', highlight: '#f1bf7d' },
+      crease: { color: '#674643', cosine: .74 },
+      shadowEdge: { color: '#5a3e43', threshold: .51, minLightDelta: .13 },
+      hatch: { color: '#49363a', direction: [.72, 1, .19], spacing: .124,
+        width: .24, lightRange: [.22, .49], strength: .62 }
+    }
+  }
+};
+```
+
+- `crease.cosine` sets the normal-angle cutoff for that material or target.
+  Lower values reserve ink for sharper turns. The global `creaseCosine`
+  supplies the default.
+- `shadowEdge` inks the dark side of a lighting transition within a
+  continuous surface. `threshold` defaults to `.4` and `minLightDelta` to
+  `.06`. The light signal uses the shading normal against `ink.light`
+  and includes directional, contact, or cloud shadow attenuation where
+  the headless splat lighting path supplies it.
+- `hatch` adds rest-space stripes in shades below the upper end of
+  `lightRange`. The lower end sets where they reach full strength.
+  `direction` is the local XYZ direction across the stripes, `spacing`
+  is the distance between stripes in scene units, and `width` is the
+  fraction of that period filled by ink. Stripes fade as they approach
+  the resolution limit of the art grid. Use a fixed `color` or palette
+  `steps` to set the hatch color.
+
+Pass an `inkShot` object to `render()` or use `--ink-shot file.json` to
+patch the look for a single shot. Scene defaults, materials, and matching
+scene targets apply first. The shot applies its defaults, material
+patches, and matching targets in that order. Target lists apply in
+author order. A field such as `shadowEdge: { strength: .16 }` keeps
+the inherited threshold and color. An explicit `false` disables the
+treatment on that target. `--ink off` disables the whole pass.
+
+The [night inspection demo](../examples/material-ink-rules.js) keeps the
+keeper's face quiet and strengthens the approaching machine using a
+[shot patch](../examples/material-ink-shot.json). Use `--passes inkMask`
+for a color-coded view of the visible treatments and its legend.
+
+```sh
+node cli/ink-studio.js render examples/material-ink-rules.js \
+  --w 336 --h 176 --px 1 --t 2.25 \
+  --ink-shot examples/material-ink-shot.json --passes inkMask,materialId \
+  --out night-inspection.png
+```
+
 See [Stable dithering and camera review](stable-dithering.md) for per-object anchors and native-resolution pan and orbit clips. Camera snapping applies to orthographic projection. World-space dithering samples at the visible surface. Object-space dithering maps the sample back to the splat's rest frame, using the rig transform where available. Screen-space dithering follows the art grid. View-direction dithering projects the surface hit onto a plane chosen from the camera heading and elevation. Use `--ortho --snap`, `--dither-space screen|world|object|view`, and `--resolve native|coverage|clusters`. The coverage and cluster modes render four subpixels per art pixel and can protect named objects, materials, glints and small emissive details.
 
 ## Art-pixel effects
@@ -412,6 +473,8 @@ emissiveFinishes: [{
 - `spill` uses an invisible area light. Give it a fixed world-space `at` position or an `offset` from the current center of the selected emitters. Control its shape, direction, falloff, and shadows with the [area light settings](scene-optics.md). For shadow-casting spill in JavaScript sculpts, set `keepRenderSdf: true` before baking. The diorama builder retains the required shadow geometry automatically.
 - `glow` uses visible emission coverage and depth to spread light around the core on the native art grid. It supports `falloff`, source `threshold`, and `depthBias`. Below 96 art pixels on the shorter side it defaults to one art pixel of reach and 68% of the regular strength. Override the cutoff, radius, and strength with `small`, or use `small: false` to keep the same appearance at every size. Set `glow: false` to suppress the scene glow for the selected emitter as well.
 
+- Set `glow.scale` from 1 to 8 to evaluate broad glow on a cheaper grid in the headless renderer. The radius remains in native art pixels and accepts 1–48. A glow smaller than its scale uses the native path. Coarse cells keep the strongest visible source per profile, and each reconstruction tap checks that source's depth against the native receiver. The emitting core stays on the native grid. Request `captureGlowStats: true` for source counts, coarse texels, and kernel visits in `frame.glowStats`.
+
 Use `--emissive-finishes off` to disable the profiles. `--area-lights off` disables the spill, and `--raw` keeps the core and spill while bypassing the screen glow.
 
 ```sh
@@ -422,9 +485,17 @@ node cli/ink-studio.js render examples/emissive-finishes.js --w 322 --h 152 --px
 
 Set `look.splatOrder = 'surface'` or pass `--splat-order surface` to sort overlapping fragments by an estimated intersection with each splat's surface plane. `center` uses the ordinary global order. The queue has a configurable `fragmentBudget` and replays the original order if the budget is exceeded. The result sets `orderFallback` in that case.
 
+Use `--splat-order selective` for [bounded local transparency](surface-order.md#selective-transparency)
+with opaque-depth rejection and tile receipts. The same mode works in the
+WebGPU Gaussian renderer.
+
+Use the [live WebGL surface-order pass](surface-order.md) to repair a visible crossing at the art grid. It keeps separate limits for fragment layers and submitted work.
+
 Run `node scripts/experiment-splat-sampling.js <output-directory>` to reproduce the independent footprint and ordering experiments. The four-tap footprint experiment increased short-sequence flicker in the tested scenes. The surface-order test with crossed planar splats corrected all 576 misordered opaque overlap pixels in that fixture.
 
 ## Directional sprite atlas
+
+Use [visible-error view selection](impostor-atlases.md#choose-view-angles-by-visible-error) to allocate directional tiles where the silhouette, gaps or a protected highlight changes quickly.
 
 ```sh
 ink-studio atlas examples/art-pipeline.js --t 1.2 --w 92 --h 76 --directions 8 --cols 4 --maps depth,normal,emission
@@ -438,3 +509,83 @@ Use [artist-authored cards and impostors](impostor-atlases.md) to place the resu
 In Node, use `spriteAtlas(world, { width, height, directions, times, fps, pivot, view, maps, pose })`. Supply a `pose(world, time)` callback for scenes that need to advance a stateful timeline or pose a rig. A separate effect history is kept for each direction.
 
 For keyed fragmentation and reassembly with stable ownership, see [world-space reveal and reconstruction](world-reconstruction.md).
+
+## Shared opaque surfaces
+
+Request `['opaque-surface']` in the headless renderer to inspect the nearest
+depth-writing owner of each native art pixel. Textured triangles and traced
+SDF hits use the same depth test and output buffers. A cutout reveals the
+surface behind it. A transparent highlight can change the image while the
+opaque owner remains visible in the pass.
+
+| Channel | Data |
+| --- | --- |
+| `depth` | Camera-axis depth in scene units. Empty pixels use positive infinity. |
+| `surfaceCoverage` | Coverage of the depth owner, from zero to one. Use the existing `coverage` for composited opacity including soft layers. |
+| `objectId`, `materialId` | Unsigned indices into `objects` and `materials`. Zero is unassigned. |
+| `geometricNormal`, `shadingNormal` | Unit world-space normals. On a two-sided mesh, the geometric face normal faces the camera and the shading normal includes the painted normal map. A traced SDF hit reports the field gradient in both. Empty normals use zero vectors. |
+| `position`, `objectPosition` | XYZ of the hit in world and rest coordinates. A static SDF uses its traced position in both channels. With a mesh, supply `restPoints` to attach a separate rest position to each vertex. Without these coordinates the mesh returns its world position. |
+| `surfaceUV`, `surfaceUVValid` | UV in the mesh's authored chart, before atlas packing, affine paint projection, or UV slip. V increases down the chart. SDF hits use rest XYZ and have zero UV validity. |
+| `surfaceKind` | An index into `surfaceKinds`. Zero is empty. Mesh and SDF owners have distinct entries. |
+| `surfaceMotion`, `surfaceMotionValid` | Current minus prior XY in native art pixels, with positive Y down. Mesh motion follows the prior triangle vertices. SDF motion reprojects the static world hit. Valid pixels use 255. Invalid vectors use zero. |
+
+Mesh and SDF motion require a visible prior hit from the same surface at
+compatible depth. Disocclusions, cuts, a rewind, a changed render source, and
+art-grid or projection changes invalidate the pair. Keep the mesh atlas
+order, named chart IDs, and triangle order stable between samples. Splats
+have their own [part motion](#part-motion-and-previous-depth) channels.
+
+```js
+const prior = ink.render(world, { ...view, t: 0, captureSurfaceMotion: true });
+// Update the mesh and camera to the next pose before sampling.
+const frame = ink.render(world, {
+  ...view, t: 0.1, passes: ['opaque-surface'], motionFrom: prior.motionReference
+});
+```
+
+For a sequence use `ink.createSurfaceMotionHistory()` as
+`surfaceMotionHistory` or pass each prior reference explicitly. A host that
+rebuilds its scene buffers can supply a stable `surfaceMotionSource` token
+while the geometry keeps the same identities. Set `resetSurfaceMotion`
+to reset that history at a cut. Recipe graphs can read the same buffers
+with `scene.render` and `scene.pass`.
+
+```sh
+ink-studio passes examples/opaque-surface-gate.js --channels opaque-surface \
+  --w 192 --h 120 --px 1 --px1 --previous .55 --t .7 --out gate-passes
+```
+
+The CLI writes PNG previews and a lossless copy of the selected opaque
+channels. Read `passes.json` → `opaqueSurface` for filenames, component
+counts, and the native dimensions. Buffers are interleaved and top-down.
+The `f32le` files are little-endian float32, `u32le` files are little-endian
+unsigned integers, and `u8` files contain bytes. Preview scaling leaves
+the raw files on the native grid.
+
+Use `ink.pickSurface(frame.passes, x, y)` or the CLI command
+`surface-pixel <scene> --at x,y` to read the depth owner at a top-down
+native art pixel. [Indexed scene meshes](textured-surfaces.md#indexed-scene-meshes)
+shows the command and the world-space ray query.
+
+## Depth proxy diagnostics
+
+Request `['depth-proxy']` in Node or `--channels depth-proxy` in
+`ink-studio passes`. The channels use the top-down native art grid.
+
+| Channel | Data |
+| --- | --- |
+| `proxyDepth` | Camera-axis depth of the nearest proxy triangle before tolerance. Empty samples are positive infinity. |
+| `proxyRejected` | Unsigned count of sampled splat fragments rejected by the proxy at the pixel. The heat map uses a logarithmic display scale. |
+| `proxyRemovedCoverage` | Combined opacity of rejected splat fragments, from zero to one. The value is the union of their alpha samples. |
+
+A rejection records a sample at the proxy depth test, before
+blending the remaining fragments. Other occluders in the scene can
+also affect the final color at that pixel. The CLI saves the previews
+and lossless data in the `proxyData` section of `passes.json`.
+Headless graphs can read the same channels through `scene.pass`.
+
+For [mixed asset representations](sprite-reconstruction.md#mixed-representations-on-one-asset),
+request `partId` alongside `opaque-surface`. Use the `parts` table
+to read the authored part on a visible mesh, curve, splat, or distant
+sprite. The CLI saves the lossless part IDs under `partData` in
+`passes.json`. `surface-pixel` includes the visible part label.

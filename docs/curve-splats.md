@@ -3,7 +3,10 @@
 Ink can render a 3D path as connected splat segments. The headless renderer
 integrates density along each finite segment and composites its colour at the
 segment's local depth. Splitting a straight span preserves its density through
-the joint. Ordinary native splats can share the frame and occlude the curves.
+the joint. Ordinary native splats can share the frame and occlude the curves. [The WebGL 2 preview](gpu-finite-curves.md)
+uses the same authored shapes and has a matched reference review.
+[Projected-error subdivision](curve-subdivision.md) adapts those spans to the art grid.
+[Curve baking](curve-bake.md) turns them into depth cards and textured ribbons.
 
 ## Author a source
 
@@ -354,6 +357,9 @@ The CLI can render the same editable study with
 
 ## Drive strands from rigs and simulation
 
+Use [surface-grown strands](surface-grown-strands.md) to grow fibres, frays,
+and stitches from roots on a posed mesh, cloth chart, or editable SDF.
+
 `K.curveSplats.bind(builder, source, driver, appearance)` prepares the
 reference path and assigns its splat rows once. Each pose moves the knots and
 rebuilds the segment geometry in those rows. Width, taper, twist, caps,
@@ -679,11 +685,102 @@ default to false and can be set independently.
 Run `node examples/curve-depth-crossings.cjs studio/out/curve-depth-crossings`
 to render the woven crossings, the mist pass, and the shadow switches.
 
+### Budget strand shadows separately
+
+```js
+K.curveSplats.draw(builder, ropeBundle, {
+  object: 'rope', material: 'hemp', edge: 'hard', width: 0.026,
+  shadow: {
+    cast: true,
+    transmittance: 0.62,
+    group: { samples: 12, maxError: 1.5 }
+  }
+});
+```
+
+`shadow.group` builds a shadow-only guide from the strands in one draw.
+Use separate draws for groups that should cast separate silhouettes.
+`samples` sets the number of spans on the guide (4–64). `maxError` sets a
+limit in light-map texels (0.01–32) for variation from the guide, including
+depth and width. The guide estimates opacity from the authored cast coverage.
+Set an explicit `width` in world units or `opacity` from 0 to 1 to tune the guide.
+
+Set `liveSun.strandShadows.maxSpans` in the scene or render options to let the
+headless sun choose guides. It chooses the largest eligible reductions
+first. A budget may stay over target when the light resolves a group or
+some strands use a cast mask, a dash pattern, clips, a timed reveal, or a
+profiled section. Runtime rigs and multi-time exposure also keep physical
+detail for the shadow pass. Directly posed curve bindings update their
+shadow guides along with their strands.
+
+`transmittance` sets the nominal direct-light fraction of an active fibre
+independently of its picture opacity. On a hard fibre, 0 blocks direct light
+and 1 passes it. Soft fibres use the value to set the strength of their
+integrated profile. Omit it to derive shadow opacity from visible opacity.
+Overlapping fibres multiply their transmission. Touching spans of one hard
+fibre share a layer, while separate crossings can create their own layers.
+
+The picture's strand LOD and depth cards leave the physical cast in place.
+Read the number of submitted shadow spans, the ray tests, and retained
+layers from `renderStats.strandShadows`. See the
+[live sun controls](live-sun.md#strand-shadow-budgets) for layer limits.
+
 ## Simplify strands at a distance
 
 Set `lod` on a strand appearance or a grouped source such as a bundle or
-textile plan. It applies to the headless view. The source paths stay
-editable and the physical strands still cast their authored shadows.
+textile plan. The source paths stay editable and the physical strands
+still cast their authored shadows. Coverage-based grouping runs in both
+headless and WebGL. The pitch-only and chord-simplification settings below
+are available in the headless renderer.
+
+### Group unresolved strands and hand off to cards
+
+Draw each set of companion strands together. Use separate draws on the same
+object and part for neighboring coils, ropes, or tassels whose gaps should
+remain visible. Set `edge: 'hard'` and enable coverage-based aggregation.
+
+```js
+K.curveSplats.draw(builder, bundle, {
+  object: 'rigging', material: 'cord', target: { part: 'ropes' },
+  width: 0.021, edge: 'hard',
+  lod: { aggregate: { samples: 20, coverage: {
+    width: [0.45, 0.85], spacing: [0.42, 0.85]
+  } } }
+});
+```
+
+Both ranges are in native art pixels, from fully grouped to fully individual.
+The width test uses the widest strand. The spacing test bounds the separation
+by comparing the actual strand and guide paths at their span boundaries,
+including depth separation. One widely separated strand or a gap in the
+path can keep the whole group detailed. During the transition, the two
+representations use complementary art-pixel masks in the color and depth
+passes. The grouped strand estimates its opacity from the ratio of the
+original strand area to the guide area. Use `color`, `width`, or `opacity`
+on `aggregate` to author the guide's appearance explicitly.
+
+Use `coverage: true` for the ranges above. The grouped renderer handles
+continuous, hard, round strands. Timed, patterned, clipped, or profiled
+groups and runtime rig or bone groups use their individual geometry.
+Directly posed curve bindings can update the guide and its strand spans
+together. Reflection, portal clip, cutaway, and probe passes retain the
+individual strands for coverage-based groups.
+
+Bake the part with `ink.bakeCurves(world, { object: 'rigging', part: 'ropes',
+cutoutMipmaps: true, ribbon: false })` and bind its atlas using
+[`projectedRange`](sprite-reconstruction.md) to set the card handoff in
+art pixels per atlas texel. The bake uses the original strands and retains
+transparent gaps in each view. The optional cutout mips preserve the covered
+area at smaller scales. Set `curveLod: false` on the frame to inspect
+individual geometry and `spriteReconstruction: 'geometry'` to bypass the
+card for the comparison. Read group and span counts from
+`renderStats.strandLod` or WebGL's `curveFrame` callback.
+
+```sh
+node cli/ink-studio.js strand-lod-review --hardware --motion --out out/strand-lod
+```
+
+### Simplify by chord error or pitch
 
 ```json
 {

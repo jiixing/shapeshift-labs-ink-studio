@@ -113,8 +113,7 @@
             let next=V.mad(previous,slip,duration), shear=V.mul(next,track.stiffness);
             const amount=V.len(shear);
             if(amount>track.staticFriction*load){
-              const coefficient=track.kineticFriction+
-                .15*(track.staticFriction-track.kineticFriction)*Math.exp(-speed/track.slipScale);
+              const coefficient=W.stickSlip.dynamic(track.kineticFriction,track.staticFriction,speed,track.slipScale);
               shear=V.mul(shear,coefficient*load/amount);
               next=V.mul(shear,1/track.stiffness);
             }

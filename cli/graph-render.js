@@ -1,18 +1,19 @@
 /* Host the CPU splat renderer and pass previews in headless recipe graphs. */
 const { render, cameraCapture } = require('./render.js');
+const Draw = require('./performance-draw.js');
 const { layer: graphDeepLayer } = require('./deep-composite.js');
 const { objectMatte } = require('./object-mattes.js');
 const { history } = require('../src/render-graph.js');
 const { pose } = require('./diarama-pose.js');
-const { select, needsPartMotion, needsStrandMotion } = require('../src/art-passes.js');
+const { select, needsPartMotion, needsStrandMotion, needsSurfaceMotion } = require('../src/art-passes.js');
 const { encode, depthRange, labels } = require('./pass-preview.js');
 
 const defaults = ['coverage', 'depth', 'normal', 'objectId', 'materialId', 'emission'];
 const positionPass = new Set(['position', 'objectPosition']);
-const finitePass = new Set(['depth', 'emissionDepth', 'previousDepth', 'strandDepth']);
+const finitePass = new Set(['depth', 'emissionDepth', 'previousDepth', 'strandDepth', 'proxyDepth']);
 
 function renderGraphScene(source, { camera, lights, channels = defaults, options = {}, renderGraphInputs, renderGraphCapture,
-  take, time = take?.start ?? 0, kit } = {}) {
+  take, time = take?.start ?? 0, kit, node } = {}) {
   const api = (kit ?? require('../index.js').load()).KIT.procedural.sceneGraph;
   const { width = 128, height = 128, time: at = time, ...settings } = options;
   if (![width, height].every(n => Number.isSafeInteger(n) && n > 0 && n <= 2048) ||
@@ -25,9 +26,19 @@ function renderGraphScene(source, { camera, lights, channels = defaults, options
   const renderOptions = { ...settings, ...lighting, ...(view && { camera: view }),
     w: width, h: height, px: 1, t: at, passes: requested, ...(take !== undefined && { take }),
     ...(renderGraphInputs !== undefined && { renderGraphInputs }), ...(renderGraphCapture !== undefined && { renderGraphCapture }) };
+  const profile = Draw.active();
   const frame = render(source, {
-    ...renderOptions, ...cameraCapture(renderOptions, camera => { sampledCamera = camera; })
+    ...renderOptions, ...(profile && { renderStats: true }),
+    ...cameraCapture(renderOptions, camera => { sampledCamera = camera; })
   });
+  if (profile) {
+    const stats = frame.renderStats ?? {};
+    Draw.pass({ kind: 'scene.render', node, width: frame.w, height: frame.h,
+      rasterPasses: stats.rasterPasses ?? null, planarCaptures: stats.planarCaptures ?? null,
+      reflectionProbeFaces: stats.reflectionProbeFaces ?? null, splatRows: stats.splatRows ?? null,
+      fragments: stats.fragments ?? null, frameMs: stats.frameMs ?? null,
+      channels: requested.filter(name => frame.passes?.[name]), graphPasses: Object.keys(frame.renderGraphPasses ?? {}) });
+  }
   return { value: api.rasterFrame(frame), frame, motionReference: frame.motionReference ?? null,
     report: { width: frame.w, height: frame.h, time: at, splats: source.count,
       ...(sampledCamera && { camera: sampledCamera }),
@@ -53,14 +64,14 @@ function createSceneSampler(kit) {
     const channels = select(settings.channels);
     const motion = channels.some(channel => channel === 'motion' || channel === 'emissionMotion');
     const parts = needsPartMotion(channels);
-    const strands = needsStrandMotion(channels);
+    const strands = needsStrandMotion(channels), surfaces=needsSurfaceMotion(channels);
     const result = renderGraphScene(source, { ...settings, time, take, kit, options: {
-      ...((motion || parts || strands) && at > previousTime && { motionFrom: previousMotion }), ...options,
+      ...((motion || parts || strands || surfaces) && at > previousTime && { motionFrom: previousMotion }), ...options,
       ...(motion && { captureMotion: true }), ...(parts && { capturePartMotion:true }),
-      ...(strands && { captureStrandMotion:true }),
+      ...(strands && { captureStrandMotion:true }), ...(surfaces && {captureSurfaceMotion:true}),
       renderHistory: retained, renderHistoryKey: retained
     } });
-    previousMotion = motion || parts || strands ? result.motionReference : undefined;
+    previousMotion = motion || parts || strands || surfaces ? result.motionReference : undefined;
     previousTime = at;
     return result;
   }
@@ -130,7 +141,7 @@ function graphRenderPass(frame, channel, { emptyDepth = 1e9, kit } = {}) {
     { image: api.rasterFrame(encode({ w: width, h: height, passes: frame.passes }, channel)),
       ...(depth && { range: depthRange(raw) }) };
   const names = { objectId: 'objects', materialId: 'materials', partId: 'parts', strandId: 'strands',
-    target: 'targets', paletteOwner: 'paletteOwners' }[channel];
+    target: 'targets', paletteOwner: 'paletteOwners', surfaceKind: 'surfaceKinds' }[channel];
   const legend = names ? labels(frame.passes)[names] : undefined;
   return { value: preview.image, data: { width, height, channels, data: buffer }, valid: { width, height, channels: 1, data: valid },
     report: { channel, width, height, ...(preview.range !== undefined && { range: preview.range }),
@@ -147,8 +158,8 @@ function graph3DOperations(kit) {
       outputs: { value: 'displayRaster', frame: 'renderFrame', motionReference: 'any', report: 'record' }, time: true,
       instantiate() {
         const sample = createSceneSampler(kit);
-        const run = ({ source, options, ...inputs }, { time, take, sequence }) =>
-          sample(source, { ...inputs, options, time, sequence, ...(options.time === undefined && { take }) });
+        const run = ({ source, options, ...inputs }, { time, take, sequence, node }) =>
+          sample(source, { ...inputs, options, time, sequence, node, ...(options.time === undefined && { take }) });
         run.clear = sample.clear;
         return run;
       }

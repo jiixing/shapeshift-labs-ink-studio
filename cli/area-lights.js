@@ -39,32 +39,41 @@ function rasterize(lights, { w, h, rayAt, near, capture, clip }) {
 
 const {staticSources,occludes}=AreaLights;
 
-function createLighting(lights, world, data, alpha, { spots = [], shadow, cutoutShadow, shot } = {}) {
+function createLighting(lights, world, data, alpha, { spots = [], shadow, cutoutShadow, shot, art, spill = [] } = {}) {
   const active = lights.filter(light=>light.intensity>0).map(light=>({
     ...light, extent:Math.hypot(...light.half), tint:linear(light.rgb)
   }));
   const projectors = spots.map(light => ({ ...light, tint:linear(light.rgb) }));
-  const rig = ShotLighting.bind(shot, world, data, alpha);
-  if (!active.length && !projectors.length && !rig) return null;
-  const sources = active.some(light=>light.shadows) || (!shadow && spots.some(light=>light.castsShadow))
+  const spillLights=spill.filter(light=>light.intensity>0);
+  const rig = ShotLighting.bind(shot, world, data, alpha, art);
+  if (!active.length && !spillLights.length && !projectors.length && !rig) return null;
+  const sources = active.some(light=>light.shadows) || spillLights.some(light=>light.shadows) || (!shadow && spots.some(light=>light.castsShadow))
     ? staticSources(world,data,alpha) : [];
   const areaShadow = sources.length || cutoutShadow ? (origin, direction, stop) =>
     cutoutShadow?.(origin, direction, stop) || occludes(sources, origin, direction, stop) : null;
   const cache = [];
 
-  function evaluate(point, normal, row) {
+  function evaluate(point, normal, row, biasNormal, specular) {
     const rgb=[0,0,0];
-    AreaLights.evaluate(active,point,normal,rgb,{shadow:areaShadow});
+    const shadeNormal=art?.normal?.(row,normal) ?? normal, bias=biasNormal??normal;
+    AreaLights.evaluate(active,point,shadeNormal,rgb,{shadow:areaShadow,biasNormal:bias,specular});
+    if(spillLights.length){
+      const emitted=[0,0,0];
+      AreaLights.evaluate(spillLights,point,shadeNormal,emitted,{shadow:areaShadow,biasNormal:bias,
+        contribution:art?.spill && ((light,at)=>art.spill(light,row,at))});
+      const graded=art?.curves.emission?.(emitted) ?? emitted;
+      for(let c=0;c<3;c++)rgb[c]+=graded[c];
+    }
     for (const light of projectors) {
       const offset = light.at.map((value,k) => value-point[k]), distance = Math.hypot(...offset);
       if (distance <= spotBias || distance >= light.radius) continue;
       const direction = offset.map(value => value/distance);
-      const receive = dot(normal,direction);
+      const receive = dot(shadeNormal,direction);
       if (receive <= 0) continue;
       const weight = spotWeight(light,direction);
       if (!weight) continue;
       if (light.castsShadow && (shadow || sources.length || cutoutShadow)) {
-        const origin = point.map((value,k) => value+normal[k]*spotBias);
+        const origin = point.map((value,k) => value+(biasNormal??normal)[k]*spotBias);
         const ray = light.at.map((value,k) => value-origin[k]), stop = Math.hypot(...ray);
         if (stop > spotBias) {
           const toLight = ray.map(value => value/stop);
@@ -78,25 +87,32 @@ function createLighting(lights, world, data, alpha, { spots = [], shadow, cutout
     }
     if (!rig) return rgb.map(n => 1 + n);
     const additional = [0, 0, 0];
-    const retention = rig.sample(row, point, normal, additional);
-    return rgb.map((n, c) => n + additional[c] + retention);
+    const retention = rig.sample(row, point, normal, additional, bias);
+    return rgb.map((n, c) => (n + additional[c] + retention) * rig.exposure);
   }
 
-  function shade(pixel, point, normal, rgb, fog, fogMix = 0, row) {
+  function shade(pixel, point, normal, rgb, fog, fogMix = 0, row, biasNormal) {
     const previous = cache[pixel];
     let light;
     if (previous && previous.row === row && point.every((n,k)=>Math.abs(n-previous.point[k])<1e-6) &&
-        normal.every((n,k)=>Math.abs(n-previous.normal[k])<1e-6)) light=previous.light;
+        normal.every((n,k)=>Math.abs(n-previous.normal[k])<1e-6) &&
+        (biasNormal===previous.biasNormal || biasNormal&&previous.biasNormal&&
+          biasNormal.every((n,k)=>Math.abs(n-previous.biasNormal[k])<1e-6))) light=previous.light;
     else {
-      light=evaluate(point,normal,row);
-      cache[pixel]={point,normal,light,row};
+      light=evaluate(point,normal,row,biasNormal);
+      cache[pixel]={point,normal,biasNormal,light,row};
     }
     if (light.every(n => n === 1) || fogMix>=1) return rgb;
     const surface = fogMix ? rgb.map((n,k)=>clamp((n-fog[k]*fogMix)/(1-fogMix))) : rgb;
     const shaded = ShotLighting.shade(surface, light);
     return fogMix ? shaded.map((n,k)=>n+(fog[k]-n)*fogMix) : shaded;
   }
-  shade.receives = row => active.length > 0 || projectors.length > 0 || rig.receives(row);
+  shade.scanSurface = (point,normal,row,biasNormal,view,roughness,strength) => {
+    const highlight=[0,0,0];
+    const gain=evaluate(point,normal,row,biasNormal,{view,roughness,strength,out:highlight});
+    return {irradiance:gain.map(n=>n-1),highlight};
+  };
+  shade.receives = row => active.length > 0 || spillLights.length > 0 || projectors.length > 0 || rig?.receives(row);
   return shade;
 }
 

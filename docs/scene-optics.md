@@ -156,6 +156,8 @@ between neighboring art pixels and eases where translucent layers meet. Give
 each pane its own object ID to keep its splats together for refraction. The blend
 is deterministic at a given time and camera and needs no frame history.
 
+[Hybrid depth captures](hybrid-view-depth.md) compare meshes, depth proxies, fog, and transparent crossings in camera, portal, and reflected views.
+
 Use [translucent silhouette policies](translucent-silhouettes.md) to preserve thin glass edges and fabric, keep leaf gaps open, and soften steam on the native art grid before those layers are sorted.
 
 `depthTolerance` is the slice spacing in world units along the camera axis.
@@ -178,7 +180,7 @@ pane that moves through bounded mist, world-space rain, and a reflective basin.
 
 ## Local bounce probes
 
-[Add local bounce probes](bounce-probes.md) for baked surface color transfer and directional sky fill that follows the active environment profile.
+[Add local bounce probes](bounce-probes.md) for diffuse surface color, moving colored sources, and directional sky fill.
 
 ## Shaped area lights
 
@@ -279,6 +281,53 @@ The `reflections` export pass contains both kinds.
 ```sh
 ink-studio render examples/local-reflection-workshop.js --w 356 --h 183 --px 1 --out workshop.png
 ```
+
+## Choose close and distant reflection sources
+
+Opt in with `proxy` on a planar finish or a live water reflection. Keep
+recognizable geometry in nearby water and glass with a planar capture,
+then blend into a local probe or the scene environment as the surface
+gets farther away or rougher.
+
+```js
+const proxy = {
+  distance: [7, 12],
+  roughness: 0.12,
+  roughnessRange: [0.5, 0.85],
+  probe: 'lantern-bench',
+  probeSize: 32
+};
+const glass = K.reflection.material({ r: [7], materialId: 'glass' }, 'window', { proxy });
+// Inside a water body's optics:
+const reflection = { plane: 'basin', proxy: { distance: [7, 12] } };
+```
+
+Distance is depth along the camera axis in scene units in both
+projections. Each range is a smooth transition. Set either range to
+`false` to ignore that input, or give both endpoints the same value for a
+hard cutoff. The default ranges are shown above. If omitted, roughness
+comes from the material or from water reflection blur. The finish keeps
+its Fresnel, strength, tint, and mask controls.
+
+In headless renders, an optional named local probe provides the coarse
+reflection. Its faces are capped at 32 pixels by default, with 16 and 64
+also available. The environment fills gaps in the capture. If a planar
+capture cannot be used due to view orientation or pass quality, the
+receiver uses the fallback. Only sampled sources incur capture work.
+WebGL live water blends to the scene sky and skips the planar capture
+when the whole receiver is outside the planar range. Pass
+`reflectionSourceFrame` as a frame callback to inspect its source
+selection and the capture workload.
+
+```sh
+node cli/ink-studio.js render examples/reflection-proxy-dock.js --w 352 --h 224 --px 1 --raw --reflection-report dock.json --out dock.png
+```
+
+The JSON receipt records each receiver's planar, probe, and environment
+contributions alongside the total capture count and pixel workload.
+A blended lookup can count toward two sources. Node renders expose the
+same information through `renderStats: true`. Use `--reflection-proxies off`
+or `reflectionProxies: false` to compare against the authored planar paths.
 
 ## Reflection detail by surface and distance
 
@@ -426,9 +475,95 @@ Put `volume` in `finish.atmosphere`, and pass `volumeLighting` and optional `vol
 
 `D.bounded({ bounds, sample, skip })` accepts a custom density. A skip callback returns a conservative distance to the next possible nonzero sample. `D.sparse(field, { resolution, brick, time })` caches occupied bricks at one time and includes conservative interpolation-aware skipping. `D.toMesh(field, { iso, resolution })` extracts a threshold surface. `D.scatter(field, { minDensity, radius, seed })` places deterministic points inside density.
 
-Use `--atmosphere off` to disable the pass. `volumeQuality` controls `scale` (1–4), `depthTolerance`, `steps`, `stepScale`, `skip`, `samples`, `seed`, and `jitter`. The coarser pass only reuses nearby samples with compatible depth. Set `stats: true` to inspect `frame.volumeStats` ray and fallback counts. Set `jitter: 'blue-noise'` for stable spatial offsets, or `jitter: 'spatiotemporal'` with an explicit `volumeHistory: K.atmosphere.history()` for frame-varying offsets and filtered accumulation. The history resets across a changed camera, a time discontinuity, or incompatible opaque depth. CLI options include `--volume-scale`, `--volume-steps`, and `--volume-jitter`.
+Use `--atmosphere off` to disable the pass. `volumeQuality` controls `scale` (1–4), `depthTolerance`, `steps`, `stepScale`, `skip`, `samples`, `seed`, and `jitter`. Set `jitter: 'blue-noise'` for stable spatial offsets, or `jitter: 'spatiotemporal'` with an explicit `volumeHistory: K.atmosphere.history()` for frame-varying offsets and filtered accumulation. The history resets across a changed camera or a time discontinuity. CLI options include `--volume-scale`, `--volume-steps`, and `--volume-jitter`.
 
 Render `examples/art-pipeline.js` to see sculpted pool mist, a local light, and emission coloring at art resolution. For aimable beams and multiple lamps, see [Local lights in fog](fog-lighting.md).
+
+### Trial stochastic fog scattering
+
+For one bounded, lit field in the headless native fog pass, set
+`volumeQuality: { stochastic: 8, stochasticHistory: 12 }`. The stride groups
+up to eight contributing steps and draws one lighting sample from each group.
+Steps with greater visible opacity have a higher chance of being chosen. The
+native density march still computes transmittance at every step and stops at
+opaque depth. The seed, native pixel, and frame time determine the lighting
+draws. Use stride `1` to return to dense lighting.
+
+History is opt-in for static fog and lights. Supply `volumeHistory:
+K.atmosphere.history()` for direct renderer calls. CLI clips supply history
+automatically. Set `stochasticHistory: 0` for fresh samples each frame. The
+running average caps its effective sample count at the configured frame limit.
+A changed camera, time discontinuity, changed opaque depth or transmittance, or
+`resetRenderHistory: true` discards the affected history. Time-varying local
+lights bypass accumulation. Reset history when editing density or shadows in
+place. For opaque mesh scenes, use `composition: 'depth'`. Layered media, coarse
+grids, multiple fields, cloud shadows, and lightning keep their regular
+integration. Set `stats: true` to inspect field samples, lighting evaluations,
+history age, and fallback reasons on `frame.volumeStats`.
+
+```sh
+node cli/ink-studio.js clip examples/depth-aware-fog/stochastic-aperture.js \
+  --w 200 --h 124 --px 1 --px1 --fps 16 --from 0 --to 1.875 --raw \
+  --volume-stochastic 8 --volume-stochastic-history 12 --out aperture.png
+
+node scripts/review-stochastic-fog.js stochastic-fog-review
+```
+
+The review cuts between two fixed doorway shots. The comparison shows dense
+lighting, fresh stochastic samples, and accumulated samples. Its report includes
+median and 95th-percentile frame time, native-pixel RGB error, frame-to-frame
+noise, and settling times. The report marks the first point after the cut with
+three consecutive frames within one 8-bit RGB level in RMS error, measured
+against both the preceding frame and the dense reference.
+
+### Reconstruct coarse fog on the art grid
+
+Use `volumeQuality: { scale: 4, reconstruction: 'object' }` for bounded fog on the headless renderer's opaque depth pass. Object-guided reconstruction is the default when the scale exceeds one. It reuses coarse rays across pixels with compatible depth, visible object ownership, and fog overrides. A native ray supplies each side of an ownership or depth break. A tap also checks for an intervening silhouette before reusing a sample on the far side. Give a character's sculpt pieces a shared `objectId` so the guide treats them as one object.
+
+Use `--volume-reconstruction depth` for the previous depth-only interpolation and `--volume-scale 1` for full-resolution rays. Per-fragment media compositing, including water, volumetric clouds and aerial perspective, continues to integrate at fragment depth. With `stats: true`, `frame.volumeStats` reports the active mode, coarse and fallback ray counts, and native boundary work. Temporal accumulation rejects pixels whose visible object changed or that touch a current or previous boundary.
+
+```sh
+node cli/ink-studio.js fog-reconstruction review examples/depth-aware-fog/sluice-courier.js \
+  --out floodgate-review --subject courier --w 192 --h 112 --fps 10 --from 0 --to 2.4 --raw
+```
+
+Open `index.html` to play or scrub the same shot in depth-only, object-guided, and full-resolution modes. **Close-up** follows the selected character. **Mark corrected edge pixels** highlights where the object-guided opacity moves closer to the reference by at least three percentage points, from an initial error of at least four. The review includes three animated PNGs and the per-frame measurements.
+
+### Shade scattering on a coarse grid
+
+Use `volumeQuality: { scale: 4, reconstruction: 'lighting' }` to keep
+optical extinction on the native art grid and shade fog and shafts on a
+coarse grid. Each compatible tap supplies scattered color per unit of
+opacity. The renderer weights those taps by depth and visible ownership
+and applies the result to the native ray's opacity. This keeps clear pixels
+clear, including gaps narrower than the coarse grid. An opaque edge or a
+native fog pixel with no suitable tap gets a fully lit native ray. The
+result uses current-frame depth, including moving foreground geometry.
+
+The headless renderer applies this mode to its bounded splat fog pass and
+scenes made of opaque native surfaces such as a mesh doorway. It keeps the
+per-fragment path for water, aerial perspective, volumetric clouds, and
+layered surface compositions that need multiple depths. Set
+`--volume-composition depth` to use the same eligible opaque-depth path
+when comparing the older reconstruction methods.
+
+The stats distinguish `lightingSamples` (actual scattering evaluations)
+from `extinctionRays` (native density-only work) and `lightingFallbacks`
+(reconstructed pixels sent back to a full ray because all compatible taps
+were clear). `rays` counts the full rays in each mode. Use
+`--volume-scale 1` on the same settings for the fully shaded reference.
+
+```sh
+node cli/ink-studio.js render examples/depth-aware-fog/aperture-works.js \
+  --volume-reconstruction lighting --volume-scale 4 --w 256 --h 152 --px 1 --raw --out aperture.png
+node cli/ink-studio.js fog-reconstruction review examples/depth-aware-fog/aperture-works.js \
+  --volume-reconstruction lighting --subject cart --out aperture-review \
+  --w 256 --h 152 --from .4 --to 2.5 --fps 10 --raw
+```
+
+Aperture Works compares depth-only interpolation, coarse lighting with native
+extinction, and a fully shaded reference. The review JSON records per-object
+edge error in rendered RGB and fog opacity alongside lighting work.
 
 ## Pixel budgets and upload profiling
 
@@ -470,6 +605,10 @@ Set `look.passQuality` on a world or `finish.look.passQuality` in diorama JSON. 
 The scaling changes the render submission while retaining the source world and original splat IDs. An omitted plane or probe uses the existing material fallback. A scaled WebGL capture is rendered to a smaller target before it is copied into the reflection atlas.
 
 Headless `renderStats` includes submitted and omitted rows across raster passes, planar capture pixels, and local probe pixels. A lower particle fraction reduces draw work while the world continues to advance the authored effects.
+
+Use a [joint priority track](joint-load-priorities.md) to reserve subject
+draw rows and reduce particles on the same take interval as a protected
+spatial sound cue.
 
 ## Ordered ink coverage
 

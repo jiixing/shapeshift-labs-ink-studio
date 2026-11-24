@@ -54,9 +54,12 @@ ink-studio music mix render session.json --out take
   mono or stereo sources to the session's stereo sample grid.
 - **Inserts** name processors in a separate bank. Replace a definition or
   reorder the strip's insert names without editing the clips or score.
-  An insert can take its compressor detector from another strip's
-  `input`, `pre`, or `post` tap. Leave the sidechain out to detect the
-  insert's own input. An inaudible key strip can use `output: null`.
+  An insert can take its dynamics detector from another strip's
+  `input`, `pre`, or `post` tap. Inserts that support self-detection
+  read their own input when the sidechain is omitted. An inaudible key
+  strip can use `output: null`.
+- **Input gain** takes a linear 0–1 value before inserts and before the
+  input tap. It can be automated with `inputGain`.
 - **Faders** take a linear gain, with 1 at unity and 0 at silence. Stereo
   balance runs from −1 to 1. A `pre` send reads the output of the insert
   chain just before fader and balance. A `post` send reads after both.
@@ -64,6 +67,10 @@ ink-studio music mix render session.json --out take
   receiver's input. Use a receiving strip as a group, effect return, or
   parallel path. A non-master strip with no explicit output routes to the
   master. Routing and sidechain dependencies must form an acyclic graph.
+
+A [shared focus track](shared-focus-track.md) can add a beat-driven gain
+offset after inserts on selected strips. It uses the same authored focus
+cues as the native picture renderer.
 
 ## Automation
 
@@ -83,7 +90,7 @@ sample, the later point wins.
 }
 ```
 
-Fader, balance, send level, and insert automation use the session
+Input gain, fader, balance, send level, and insert automation use the session
 timeline. Clip gain automation moves with its clip and starts at
 the placed clip onset, including when the clip uses a trimmed source range.
 Beat, second, and sample lanes can coexist in one mixer.
@@ -97,11 +104,14 @@ Beat, second, and sample lanes can coexist in one mixer.
 | `reverb` | Fixed `size` and `decay` in seconds, automated `damping` |
 | `compressor` | Automated `thresholdDb`, `ratio`, and `makeupDb`, with fixed `attack`, `release`, and `lookahead` in seconds |
 | `eq` | Up to eight parametric bands with automated frequency, Q, and bell or shelf gain |
+| `dynamic-eq` | Up to six stereo-linked dynamic bells and shelves with an optional external key |
+| `clipper` | 2×, 4×, or 8× oversampling with drive, clip point, knee, and output trim |
 | `gate`, `expander` | Below-threshold dynamics. Both can take an external key |
 | `transient` | Independent attack and sustain gain, using two envelope speeds |
-| `saturation` | Soft clipping with drive, asymmetry, tone and output trim |
+| `saturation` | Soft clipping with drive, asymmetry, tone, output trim, and optional 2×, 4×, or 8× oversampling |
 | `limiter` | Stereo-linked true-peak ceiling with lookahead and release |
 | `deesser`, `band-duck` | Dialogue-focused dynamic EQ with an optional external key for band ducking |
+| `spectral-sidechain` | Required external key, fixed maximum cut, activity threshold, attack, release, and frequency range. [Spectral sidechain](spectral-sidechain.md) |
 
 Inserts have a sample-accurate `wet` control between 0 and 1, with a
 fully wet limiter. Unmarked parameters accept automation. Every insert declares its
@@ -140,6 +150,8 @@ loudness and peak metering, and mono and small-speaker checks.
 See [sound design inserts](sound-design-effects.md) for tempo echoes,
 imported impulse responses, modulation, tape drift, granular playback,
 spectral freeze, and retro sampling.
+See [production mix tools](production-mix-tools.md) for dynamic EQ, oversampled
+shaping, measured rooms, and in-context insert auditions.
 See [audio racks](audio-racks.md) for reusable routing, saved controls,
 matched bypass, and the optional offline CLAP worker.
 

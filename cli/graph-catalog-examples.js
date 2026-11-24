@@ -18,6 +18,13 @@ const sessionTone={format:'ink-studio/instrument-session',version:1,id:'bench-ba
   perspectives:{close:{asset:'tone'}},registers:[61],dynamics:[{id:'firm',velocity:.74}],articulations:['tap'],
   takes:[{id:'one',key:61,dynamic:'firm',articulation:'tap',fromSample:0,toSample:1600,releaseSample:null}]};
 const builtSessionTone={op:'audio.buildInstrumentSession',inputs:{source:sessionTone,assets:{tone:fitTone}}};
+const transientTone={...fitTone,samples:fitTone.samples.map((sample,i)=>
+  sample+.25*Math.sin(.671*i*i)*Math.exp(-i/20))};
+const alignmentTone={
+  source:{...sessionTone,perspectives:{close:{asset:'tone'},room:{asset:'room'}}},
+  assets:{tone:transientTone,room:{...fitTone,samples:[...Array(29).fill(0),...transientTone.samples.map(x=>-.65*x)]}},
+  options:{syncSamples:[0]}
+};
 const fittedTone={op:'audio.fitInstrument',inputs:{source:fitTone}};
 const playableSound={op:'music.buildPlayableSound',inputs:{source:fitTone,options:{
   variants:[{id:'body',family:'contour'},{id:'air',family:'handoff'}]}}};
@@ -93,6 +100,11 @@ const performanceBallot={op:'music.performanceBallot',inputs:{source:accompanime
     {op:'comp',lane:'lead',take:'bend',...performanceRange(0,11)}]}],
   accompaniment:{bass:'bass',metal:'metal',response:accompanimentBrief.response,hook:accompanimentBrief.hook},
   arrangements:[{id:'pedal',return:'withheld',change:'Put a low pedal under the new delivery.'}]
+}}};
+const roundShow={op:'music.runListeningRound',inputs:{source:accompanimentSession,brief:{
+  id:'study',lead:'lead',context:performanceRange(0,12),call:performanceRange(0,2.5),recall:performanceRange(8,11),
+  sources:[{id:'bell',patch:{type:'fm',index:2.4}},{id:'reed',patch:{type:'subtractive'}}],
+  relationships:[{id:'plain'},{id:'lighter',revision:{tracks:{metal:{gain:-27}}}}]
 }}};
 const sessionExperiment={op:'music.experimentEditSession',inputs:{source:editSession,brief:{
   focus:{from:{beat:0},to:{beat:2}},scout:{from:{beat:0},to:{beat:1}},roles:{hook:'lead'},
@@ -221,6 +233,11 @@ const specifications = {
   'raster.canvas': { inputs: { color: [60, 135, 190, 255] } },
   'raster.channels': { inputs: { planes: [mask, mask, mask] } },
   'raster.math': { inputs: { op: 'add', b: 2 } },
+  'raster.mouthCels': { inputs: { face: rgba, cels: {rest:rgba}, sheet: {
+    format:'ink-studio/mouth-cels',version:1,id:'mouth',fps:12,frames:1,
+    rig:{grid:[4,4],origin:[0,0],size:[4,4],rest:'rest',poses:['rest']},
+    holds:[{id:'rest',from:0,to:1,pose:'rest',approval:'approved',phones:[]}]
+  } } },
   'raster.crop': { inputs: { options: { x: 1, y: 1, width: 2, height: 2 } } },
   'raster.resize': { inputs: { options: { width: 8, height: 6, filter: 'nearest' } } },
   'raster.nineSlice': { inputs: { options: { width: 8, height: 6, insets: [1, 1, 1, 1] } } },
@@ -248,6 +265,8 @@ const specifications = {
   } } } },
   'palette.resolve': { inputs: { policy: { palette } } },
   'color.gradient': { inputs: { ramp: palette } },
+  'color.posterize': { inputs:{palette:[[30,20,50,255],[210,130,120,255]]} },
+  'raster.mix': { inputs:{source:rgba,edited:rgba,mask,options:{amount:.6}} },
   'color.stack': { inputs: { stack: { name: 'Sample', steps: [] } } },
   'color.key': { inputs: { options: { color: '#3c87be' } } },
   'fx.bitplane': { inputs: { source: slots } },
@@ -259,14 +278,37 @@ const specifications = {
     writes: [{ id: 'scanner', rect: [1, 0, 2, 2], priority: 3, attributes: { ink: 2 } }] } },
   'fx.paletteCycle': { inputs: { source: slots, cycles: { shimmer: { range: [0, 1], period: 2 } } } },
   'fx.paletteFault': { inputs: { source: slots, options: { swaps: [[0, 1]] } } },
+  'fx.moveRegions': { inputs: { source: rgba, labels: slots, transforms: [{ id: 1, offset: [1, 0], depth: -1 }] } },
+  'fx.relight': { inputs: { emission: rgba, height: slots, options: { radius: 6, emitterHeight: 2 } } },
   'fx.regionObservations': { inputs: { frames: [mask, mask] } },
   'fx.analyze': { output: 'paths' },
+  'proc.sphereMap': { inputs:{options:{width:32,height:24}} },
+  'proc.projectSphere': { inputs:{source:rgba,options:{width:32,height:24,yaw:.37}} },
+  'proc.discharge': { inputs:{options:{width:36,height:24,points:[[5,18],[30,7]],amplitude:3,branchReach:5,detail:3}} },
+  'proc.cellEdges': { inputs:{options:{width:32,height:24,spacing:7}} },
+  'proc.flowPlume': { inputs:{options:{width:36,height:24,start:[5,13],end:[34,13],widths:[2,5,2,0],bands:3}} },
+  'proc.fieldSprite': { nodes:{
+    paint:{op:'proc.fieldMaterial',inputs:{texture:rgba,ramp:palette}},
+    names:{op:'data.record',inputs:{paint:link('paint')}},
+    slots:{op:'data.collect',inputs:{source:link('names'),keys:['paint']}}
+  }, inputs:{materials:link('slots'),options:{width:32,height:24}} },
+  'proc.fieldMaterial': { inputs:{texture:rgba,ramp:palette} },
+  'proc.fieldSpriteShade': { nodes:{
+    field:{op:'sdf.shape'},
+    trace:{op:'proc.fieldSprite',inputs:{source:link('field'),options:{width:32,height:24}}},
+    paint:{op:'proc.fieldMaterial',inputs:{texture:rgba,options:{projection:'xy'}}},
+    names:{op:'data.record',inputs:{paint:link('paint')}},
+    slots:{op:'data.collect',inputs:{source:link('names'),keys:['paint']}}
+  },inputs:{surface:link('trace','surface'),materials:link('slots')} },
+  'proc.vortex': { inputs:{options:{width:48,height:36,radii:[2,4,9,13],layers:9,segments:10,thickness:1,lean:2}} },
   'proc.plasma': { inputs: { options: { width: 16, height: 12 }, motion: { rings: { rate: .25 } } } },
   'warp.scanlines': { inputs: { source: rgba, options: { rows: [{ row: 1, offset: [1, 0] }] } } },
   'warp.address': { inputs: { width: 4, height: 4, transforms: [{ type: 'zoom', scale: 1.5 }] } },
   'warp.compose': { inputs: { fields: [{ width: 1, height: 1, channels: 2, data: [.5, .5] }] } },
   'warp.sample': { nodes: { mapping: { op: 'warp.field', inputs: { width: 4, height: 4 } } },
     inputs: { field: link('mapping') } },
+  'warp.curveMap': { inputs: { path: [[2.5, 2.5], [13.5, 12.5], [2.5, 12.5], [13.5, 2.5]],
+    width: 16, height: 16, options: { strokeWidth: 3, overlap: 'last' } } },
   'warp.mesh': { inputs: { control: { from: triangle, to: triangle, triangles: [[0, 1, 2]] } } },
   'warp.grid': { inputs: { control: { columns: 2, rows: 2, points: quad } } },
   'warp.morph': { inputs: { control: { from: triangle, to: triangle, triangles: [[0, 1, 2]] } } },
@@ -343,6 +385,7 @@ const specifications = {
   'rig.skinSprite': { nodes: { binding: { op: 'rig.bindSprite', inputs: { source: rgba,
     bones: [bone] } } }, inputs: { bind: link('binding') } },
   'anim.keyframes': { inputs: { channels: { x: 'number' }, keys: [{ time: 0, value: { x: 2 } }] } },
+  'anim.cueTrack': { inputs: { cues:{ignition:.4},keys:[{at:0,value:0},{cue:'ignition',value:1}],duration:1 } },
   'anim.spriteDesync': { inputs: { source: clip } },
   'anim.subjectFeedback': { inputs: { source: rgba, options: { width: 4, height: 4 } } },
   'fx.signalRecovery': { inputs: { source: rgba, options: { lossFrames: 2, lockFrames: 3 } } },
@@ -379,6 +422,10 @@ const specifications = {
   'sim.worldRecord': worldPortsExample('record'),
   'sim.define': { inputs: { kind: 'particles' } },
   'sim.run': { nodes: { recipe: { op: 'sim.define', inputs: { kind: 'particles' } } }, inputs: { recipe: link('recipe') } },
+  'sim.mpm': { nodes: { recipe: { op: 'sim.define', inputs: { kind: 'mpm', settings: {
+    width: 32, height: 24, walls: [[0, 21, 32, 3]], bodies: [{ rect: [12, 5, 8, 8] }] } } } },
+    inputs: { recipe: link('recipe') } },
+  'raster.select': { inputs: { sources: [rgba, mask], index: 1 } },
   'audio.soundMeasurements': {inputs:{rows:[{at:0,value:[0,0]},{at:.5,value:[.6,0]}],
     options:{unit:'m/s',project:'magnitude'}}},
   'audio.measureRender': {nodes:{
@@ -553,6 +600,11 @@ const specifications = {
   'music.interval': { inputs: {a:220,b:330} },
   'music.roughness': { inputs: {spectra:[[[220,1],[440,.5]],[[228,1],[456,.5]]]} },
   'audio.buffer': { inputs: audio },
+  'audio.renderSoundRecipe': {inputs:{recipe:{format:'ink-studio/sound-recipe',version:1,
+    family:'confirm',seed:12,render:{sampleRate:8000},synth:{pitchSweep:{toSemitones:6},pulseWidth:.25},
+    retro:{bits:6,rateHz:4000}}}},
+  'audio.mutateSoundRecipe': {inputs:{recipe:{format:'ink-studio/sound-recipe',version:1,
+    family:'jump',seed:12,render:{sampleRate:8000}},options:{count:3,locks:['pitchContour'],bounds:{brightness:[.65,1.6]}}}},
   'audio.captureSample': {inputs:sampleCapture.inputs},
   'audio.print': {nodes:{bus:{op:'data.record',inputs:{dry:audio,wet:audio}}},
     inputs:{sources:link('bus'),settings:{sample:{id:'print',label:'Bench print'},
@@ -588,6 +640,7 @@ const specifications = {
   'audio.analyzeInstrumentSamples': {inputs:{assets:{tone:audio}}},
   'audio.auditionInstrumentRange': {inputs:{assets:{tone:audio},options:{offsets:[0]}}},
   'audio.buildSampleInstrument': {inputs:{assets:{tone:audio},source:{zones:[{id:'tiny',takes:['tone'],low:60,high:60,root:null}]}}},
+  'audio.alignInstrumentSession': {inputs:alignmentTone},
   'audio.analyzeInstrumentSession': {inputs:builtSessionTone.inputs},
   'audio.buildInstrumentSession': {inputs:builtSessionTone.inputs},
   'audio.auditionInstrumentSession': {nodes:{built:builtSessionTone},inputs:{instrument:link('built'),assets:link('built','assets'),
@@ -624,6 +677,9 @@ const specifications = {
   'music.traceEditSession': {inputs:{source:editSession}},
   'music.inspectEditSession': {inputs:{source:editSession}},
   'music.editSession': {inputs:{source:editSession,edits:[{op:'pin',lane:'lead',mode:'pitch'}]}},
+  'music.composeInSession': {inputs:{source:accompanimentSession,brief:{moves:[
+    {id:'release',gesture:{lane:'lead',clip:'call',voice:'line',notes:[{note:'pick',play:{releaseLimit:.065}}]}}
+  ]}}},
   'music.auditionPhraseTakes': {nodes:{capture:phraseCapture},inputs:{source:link('capture'),
     settings:{lane:'lead',phrase:'opening',takes:['soft']}}},
   'music.arrangePerformance': {inputs:{source:accompanimentSession,brief:accompanimentBrief}},
@@ -632,6 +688,13 @@ const specifications = {
     audio:link('listen','audio'),token:link('listen','token'),ballot:{listener:'example',
       answers:{identity:{choices:['a','c'],reason:'Both contours were equally memorable.'}}}}},
 
+  'music.runListeningRound': {inputs:roundShow.inputs},
+  'music.listeningEvidence': {inputs:{source:accompanimentSession,request:{focus:performanceRange(8,11),
+    context:performanceRange(6,12),solo:['lead'],mute:['metal'],repairs:[{id:'short',edits:[
+      {op:'note',lane:'lead',take:'reference',clip:'call',voice:'line',note:'return-a',set:{play:{releaseLimit:.08}}}
+    ]}]}}},
+  'music.recordListeningRound': {nodes:{round:roundShow},inputs:{key:link('round','key'),audio:link('round','audio'),
+    token:link('round','token'),ballot:{listener:'example',answers:{replay:{choices:['a'],reason:'The entrance leaves room for the call.'}}}}},
   'music.experimentEditSession': {inputs:sessionExperiment.inputs},
   'music.keepSessionExperiment': {nodes:{trial:sessionExperiment},inputs:{source:editSession,report:link('trial'),
     choice:{candidate:'take-001',reason:'Keep the lighter onset for this example.'}}},
@@ -653,6 +716,8 @@ const specifications = {
   'music.routeSampleKit': {nodes:{played:{op:'music.inspectProduction',inputs:{source:production}}},
     inputs:{tracks:link('played','events'),routes:{lead:{pad:'reed'}}}},
   'music.programPads': {inputs:padPattern.inputs},
+  'music.projectRhythm': {inputs:{source:{id:'call',length:1,steps:[{id:'tap',beat:.25,pad:'ring',offset:.014}]},
+    routes:{notes:{voice:{from:'ring',pitches:[{degree:1}]}},pads:{ring:{pad:'metal'}}}}},
   'music.composeSlices': {inputs:{source:{id:'slice-canon',output:'duet',slices:{
     tick:{pad:'metal',play:{sample:'hit'}}
   },patterns:{

@@ -26,6 +26,16 @@
       inputs:{sources:'record',settings:'record'},outputs:{audio:'record',entries:'record',report:'record'},
       run({sources,settings},{seed,time}) {return A.audioPrint.prepare(sources,settings,{seed,time});}
     },
+    'audio.separateHarmonicPercussive': {
+      description:'Split aligned tonal and transient layers with one stereo-linked spectral analysis.',
+      inputs:{source:'audio',options},outputs:{harmonic:'audio',percussive:'audio',report:'record'},
+      run({source,options}) {return A.harmonicPercussive.split(source,options);}
+    },
+    'audio.separateEditorial': {
+      description:'Split a recording into editable tonal and transient clips for one audio editorial session.',
+      inputs:{source:'audio',options},outputs:{value:'record',assets:'record',report:'record'},
+      run({source,options}) {return A.harmonicPercussive.session(source,options);}
+    },
     'audio.repairDialogue': {
       description: 'Repair clicks, hum, sibilance and localized spectral noise and audition the removed signal.',
       inputs:{source:'audio',options},outputs:{value:'audio',before:'audio',removed:'audio',report:'record'},
@@ -43,9 +53,9 @@
       run({source,sources,state,options}) {return A.audioRack.render(source,sources,state,options);}
     },
     'audio.auditionRack': {
-      description: 'Print an aligned, loudness-matched bypass and effects rack with a recalled state.',
+      description: 'Print an aligned, loudness-matched bypass, processed take, and differences from a recalled rack.',
       inputs:{source:'record',sources:'record',state:{type:'record',default:{}},options},
-      outputs:{value:'audio',bypass:'audio',report:'record',state:'record'},
+      outputs:{value:'audio',bypass:'audio',difference:'audio',effect:'audio',report:'record',state:'record'},
       run({source,sources,state,options}) {return A.audioRack.audition(source,sources,state,options);}
     },
     'audio.meterMix': {
@@ -136,6 +146,16 @@
       inputs:{clips:'array<record>',options},outputs:{value:'audio',report:'record'},
       run({clips,options}) {return A.gestureBank.audition(clips,options);}
     },
+    'audio.renderSoundRecipe': {
+      description: 'Render a seeded one-shot with editable synth controls and an optional retro insert as typed PCM.',
+      inputs: { recipe: 'record' }, outputs: { value: 'audio', recipe: 'record', report: 'record' },
+      run({ recipe }) { return A.soundRecipe.render(recipe); }
+    },
+    'audio.mutateSoundRecipe': {
+      description: 'Generate a deterministic family of recipes with pitch, duration, or attack locks.',
+      inputs: { recipe: 'record', options }, outputs: { value: 'array<record>', plan: 'record' },
+      run({ recipe, options }) { return A.soundRecipe.mutate(recipe, options); }
+    },
     'audio.synthesizeGesture': {
       description:'Excite a breath resonator, grainy friction model or inharmonic metal modes and print aligned perspectives.',
       inputs:{options:{type:'record'}},outputs:{value:'audio',perspectives:'record',report:'record'},
@@ -160,6 +180,11 @@
       description:'Bake a labeled key map into a standard Ink sampler patch and playable assets.',
       inputs:{assets:'record',source:'record'},outputs:{value:'record',assets:'record',report:'record'},
       run({assets,source}) {return A.sampleInstrument.build(assets,source);}
+    },
+    'audio.alignInstrumentSession': {
+      description:'Measure shared transients to calibrate the offsets and polarity of recording perspectives.',
+      inputs:{source:'record',assets:'record',options},outputs:{value:'record',report:'record'},
+      run({source,assets,options}) {return A.instrumentSession.align(source,assets,options);}
     },
     'audio.analyzeInstrumentSession': {
       description:'Propose attacks, key-up, and loops for related takes on one recording clock.',
@@ -300,6 +325,11 @@
       inputs:{source:'record',assets:sessionAssets,edits:scoreRequests},outputs:{value:'record'},
       run({source,assets,edits}) {return {value:A.musicSession.create(assets).edit(source,edits)};}
     },
+    'music.composeInSession': {
+      description:'Audition cue form, locked phrase changes, voicing, note gestures and timing forks through an editable session.',
+      inputs:{source:'record',brief:'record',assets:sessionAssets},outputs:{value:'record',sessions:'record',clips:'record'},
+      run({source,brief,assets},{host}) {return A.musicSession.create(assets,host).compose(source,brief);}
+    },
     'music.auditionPhraseTakes': {
       description:'Audition whole-phrase control takes in context with one score clock, mixer and playback gain.',
       inputs:{source:'record',settings:'record',assets:sessionAssets},outputs:{audio:'record',report:'record'},
@@ -323,6 +353,28 @@
       description:'Verify the blind excerpts and resolve a listener’s favorite or tie for each answered question.',
       inputs:{key:'record',ballot:'record',audio:'record',token:{type:'string',default:''}},outputs:{value:'record'},
       run({key,ballot,audio,token}) {return {value:A.performanceBallot.archive(key,{token,...ballot},audio)};}
+    },
+    'music.runListeningRound': {
+      description:'Scout instrument builds on one performance, cross the finalists with ensemble choices, and publish a blind listening ballot.',
+      inputs:{source:'record',brief:'record',assets:sessionAssets},
+      outputs:{value:'record',sessions:'record',clips:'record',test:'record',key:'record',audio:'record',token:'string'},
+      run({source,brief,assets},{host}) {
+        const {value,sessions,clips,ballot}=A.musicSession.create(assets,host).listeningRound(source,brief);
+        return {value,sessions,clips,test:ballot?.test ?? {},key:ballot?.key ?? {},audio:ballot?.audio ?? {},token:ballot?.test.token ?? ''};
+      }
+    },
+    'music.listeningEvidence': {
+      description:'Hear a lead-in, a rendered solo, a true source mute and a specific repair through the original session desk.',
+      inputs:{source:'record',request:'record',assets:sessionAssets},outputs:{value:'record',clips:'record',reference:'audio'},
+      run({source,request,assets},{host}) {
+        const result=A.musicSession.create(assets,host).listeningEvidence(source,request);
+        return {...result,reference:result.clips.reference};
+      }
+    },
+    'music.recordListeningRound': {
+      description:'Verify blind excerpts and preserve a listener’s exact choices, ties, and reasons.',
+      inputs:{key:'record',ballot:'record',audio:'record',token:'string'},outputs:{value:'record'},
+      run({key,ballot,audio,token}) {return {value:A.listeningRound.archive(key,{...ballot,token},audio)};}
     },
     'music.experimentEditSession': {
       description:'Scout a matrix of sound, phrase and cue edits through a shared session and hear diverse finalists in context.',
@@ -402,6 +454,16 @@
       run({source,options}) {
         const result=A.padPattern.perform(source,options);
         return {...result,options:result.value.options};
+      }
+    },
+    'music.projectRhythm': {
+      description:'Share one written pad rhythm and its played offsets between notes, a sample kit and Foley.',
+      inputs:{source:'record',routes:'record',options},
+      outputs:{value:'record',clip:'record',pads:'record',events:'array<record>',kitOptions:'record',foley:'record',report:'record'},
+      run({source,routes,options}) {
+        const value=A.rhythmProjection.project(source,routes,options);
+        return {value,clip:value.clip ?? {},pads:value.pads,events:value.pads.performance.events,
+          kitOptions:value.pads.performance.options,foley:value.foley,report:value.report};
       }
     },
     'music.composeSlices': {

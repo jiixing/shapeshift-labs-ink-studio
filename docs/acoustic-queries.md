@@ -50,7 +50,10 @@ if (read.status === "ok" && read.value.audible) {
 ```
 
 Use the [spatial audio mixer](spatial-audio.md) to play cues with the same
-acoustic paths.
+acoustic paths. For local room bounces, add [geometry-driven early reflections](early-reflections.md) to the mixer.
+
+Use [acoustic ambience zones](acoustic-ambience.md) to apply those paths,
+weather, and shelter to continuous PCM beds.
 
 The report includes the estimated level, linear amplitude gain, propagation
 delay, distance and high-frequency loss relative to the low band

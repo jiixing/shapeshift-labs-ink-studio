@@ -7,7 +7,9 @@ editable recipe. Use [producer revisions](music-producer.md),
 as sources. Use [DAW handoff](clap-instruments-and-handoff.md#hand-the-edit-to-a-daw)
 to export the active comp, routing, automation, and aligned prints.
 Use [session experiments](music-session-experiments.md) to compare combinations
-of sound, phrase, and cue decisions through the same desk.
+of sound, phrase, and cue decisions through the same desk. The
+[composition workbench](composition-workbench.md) auditions and saves cue
+forms, locked phrase moves, note gestures and timing forks as session recipes.
 
 ## Assemble a session
 
@@ -262,6 +264,128 @@ The browser usually owns the audio listener. A headless player can instead
 use `POST /audio` with `{frames,client}`. Its response is little-endian
 interleaved float32 stereo with the chunk address in `X-Ink-Transport`.
 
+To launch clips and record a fresh arrangement, open the [clip jam](music-clip-jam.md).
+
+## Audition sounds in the track
+
+Set the loop around the phrase you want to hear and select a native score
+track in **Browse sounds**. Search by name or description, or filter by
+role. **Match source sound** ranks by timbre against the source patch.
+**Match a WAV** ranks against the first half-second of a short clip after
+trimming its leading silence. The browser compares spectral balance,
+attack, and decay. Isolated hits and notes make good examples.
+
+Click a result while the loop is playing. The candidate plays the source
+take's pattern at the current playhead, through the same track, buses,
+sends, and mixer inserts. A bass compressor keyed from the kick strip
+continues to receive the kick as you audition. **Original mix** clears the
+temporary audition. Use **Keep sound** to create an editable score take
+and comp it into the selected loop, then **Save session** to write it.
+The browser uses the currently auditioned take or the saved take covering
+the loop. Choose a **Source take** explicitly when the loop crosses a comp
+boundary. Tracks pinned in full are excluded.
+
+Run the four-bar Backpressure demo from the repository:
+
+```sh
+node examples/music-production/sound-browser.cjs output/backpressure
+node cli/ink-studio.js music session play output/backpressure/session.json output/backpressure/loop.json --out output/backpressure/my-take.json
+```
+
+Open `output/backpressure/index.html` for matched full mix and bass tap
+comparisons. Upload `kick-example.wav` in the live desk to try matching
+against an actual recorded stroke. Saved recipes retain the WAV paths for
+any kept stock sounds. Include the referenced WAVs when sharing a recipe.
+
+The loopback API supports `sounds` with `lane`, optional `source`,
+`role`, `query`, and `sample`. Use `"current"` for the source sound or
+base64-encoded 8 kHz mono 16-bit little-endian PCM (64–4096 frames).
+Use `audition-sound` with `{lane,source,id}` to queue a candidate at the
+next unrendered sample, or `{id:null}` to clear it. Use `keep-sound` with
+the same candidate and an optional `take` name to save it into the edit.
+
+### Export the candidate
+
+Click a sound, then open **Export the candidate**. **Preview one-shot**
+plays the isolated sound. For instrument patches, set the MIDI note,
+velocity, or gate before previewing. Pause the loop to hear the isolated
+preview by itself.
+
+Choose **WAV cue**, **Playable sample**, or **Event-sound family**, then
+click **Save asset**. Ink uses the last isolated preview, or its default
+one-shot settings when you save straight from a loop audition. The files
+go into a `-sounds` directory beside the file named by `--out` or the
+source session when no output was specified.
+
+- A **WAV cue** contains the preview WAV, audition settings, and the
+  source patch and its WAVs or the editable seeded recipe.
+- A **Playable sample** adds a content-addressed sample catalog, a MIDI
+  pad kit, and a one-hit performance.
+- An **Event-sound family** adds an asset registry with a pinned
+  `event/<name>` reference. Seeded candidates also generate four
+  mutation variants with duration and attack locked. Each member has
+  its own pinned sound reference at the chosen revision. Instrument
+  candidates keep the audition as the default member.
+
+List a `.sound.json` file in the session's named `assets` table to browse
+it under **Session sound recipes** or the **Effect** role. The original
+recipe travels with each saved copy. For any kind of kept sound, rebuild
+the preview WAV with `ink-studio music sound replay audition.json --out rebuilt`.
+
+For automation, send the current `{lane,source,id}` to the authenticated
+`POST /sound-preview` endpoint. Instrument previews accept an optional
+`settings` record with `midi`, `velocity`, `gate`, `roundRobin`, and
+`seed`. The `export-sound` command takes the same candidate identity,
+`kind`, optional `name`, and optional family `revision`.
+
+Run the [Keep Browser Sound demo](../examples/music-production/keep-browser-sound.cjs)
+to export a seeded candidate from the loopback browser, play it from
+the sample kit, and trigger the pinned family from recorded world events.
+
+## Record straight into take lanes
+
+In the live desk, choose a native instrument lane and **Enable MIDI** in a
+browser with Web MIDI support. The **On-screen keys** and the Breath, Pressure, and Room sliders work
+without a controller. The dry native instrument monitor plays on the browser
+audio device. Saved takes use the regular score renderer and mixer.
+
+- **MIDI notes and expression** records note timing, velocity, sustain,
+  pressure, breath (CC2), contact (CC1 or CC74), expression (CC11),
+  room (CC91), and pitch bend (±2 semitones). Captured notes are editable in a played note clip.
+  The melodic clip replaces the lane inside the pass when auditioned. Drum clips
+  layer over the score's drum events. Existing groove templates leave captured
+  timing alone.
+- **Gesture on written notes** records the same controllers as editable
+  phrase drivers over the existing notes. Hear the gesture by auditioning the
+  captured take. Separate passes can use the phrase-comp workflow below.
+- **Enable mic** adds a mono input to either recording mode. **Microphone
+  only** also works without a native instrument. Select an existing audio
+  lane or let Ink create a new mic lane when it saves the first take. Use
+  headphones and adjust **Mic offset** if the device introduces an audible
+  delay. A positive offset reads the microphone that many milliseconds later
+  and places the result at the same loop start.
+
+Press **Play**. **Record passes** saves each full pass starting at the next
+loop boundary. **Recover last pass** saves the most recent complete pass
+from the enabled inputs. Enable inputs before the start of the pass. A
+lead-in, half pass, or playback gap will be skipped. Recording loops range
+from 0.25 seconds to 26 seconds. At higher sample rates, the rolling
+microphone buffer can require a shorter loop.
+
+The score and mic takes use the same name when recorded together. Select
+them in **Live takes**, then use **Keep range** to include them in the saved
+mix. The mic gets its own WAV in a recordings folder beside the output
+recipe, or beside the input recipe when no `--out` was set. **Save session**
+writes the editable takes and their WAV paths. Existing capture history stays
+in the browser's rolling window until a pass is saved.
+
+Generate the Take Room example and launch the desk:
+
+```sh
+node examples/music-production/session-recording.cjs output/take-room
+node cli/ink-studio.js music session play output/take-room/session.json output/take-room/loop.json --out output/take-room/my-takes.json
+```
+
 ## Capture and comp phrase performances
 
 A phrase take stores continuous control traces on the score clock. One
@@ -319,8 +443,12 @@ ink-studio music session audition-phrase takes.json listen.json --out review
 Use a listening request such as
 `{"lane":"reed","phrase":"call","takes":["lean","carry"]}`. Optional
 `from` and `to` select the preview context with normal mixer addresses.
-The alternatives use one desk and share a playback gain. Set
-`reference: false` to hear only the requested takes.
+The alternatives use one desk and share a playback gain by default. To
+compare the played shape at a common listening level, add
+`"loudness":{"targetLufs":-15,"ceilingDbTP":-1.5}` to the listening request.
+Ink lowers the common target if a take would otherwise exceed the true
+peak ceiling. The report gives the gain and measured playback level for
+each take. Set `reference: false` to hear only the requested takes.
 
 ```json
 [
@@ -358,6 +486,9 @@ under each lane's `performances`. Listen through
 Run `node examples/music-production/phrase-performance.cjs output` for
 the Split Reed played three ways and a comp that carries the held note
 through a bass pickup. [Gesture mapping research](https://nime.org/proc/nime2002_hunt/) · [Ableton comping](https://www.ableton.com/en/manual/comping/)
+
+Use [phrase contour borrowing](music-phrase-contour.md) to fit timing,
+accents, and breath from a played or gesture take to different notes.
 
 ## Reproduce the long-form audition
 

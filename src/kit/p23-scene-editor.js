@@ -2,6 +2,7 @@
 (function (K) {
   const A = K.authoring, DIO = K.diorama;
   const { clone, freeze } = K.procedural.data;
+  const documents = new WeakMap();
   const modes = ['replace', 'add', 'toggle', 'remove'];
   const encodeSlot = key => key.replaceAll('~', '~0').replaceAll('/', '~1');
   const record = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -18,14 +19,14 @@
   function sceneIndex(scene, env) {
     const solids = scene.solids ?? [];
     const nodes = new Map(), byEntity = new Map(), roots = [], parts = new Map(), groups = new Map();
-    function parent(kind, name) {
-      const node = { key: kind + ':' + name, kind, name, children: [] };
+    function parent(kind, id, label = id) {
+      const node = { key: kind + ':' + id, kind, name:label, children: [] };
       nodes.set(node.key, node);
       return node;
     }
 
     for (const name of new Set([...Object.keys(scene.parts ?? {}), ...solids.map(solid => solid.part).filter(Boolean)]))
-      parts.set(name, parent('part', name));
+      parts.set(name, parent('part', name, scene.parts?.[name]?.label));
     for (const [name, node] of parts) {
       const container = parts.get(scene.parts?.[name]?.parent);
       (container?.children ?? roots).push(node);
@@ -36,16 +37,23 @@
       roots.push(node);
     }
 
-    function solidNode(solid, path, operand, modifier) {
-      const key = solid.id === undefined ? 'slot:' + path.join('/') : 'solid:' + solid.id;
+    function solidNode(solid, path, address, operand, modifier) {
+      const slot = 'slot:' + path.join('/');
+      const key = solid.id === undefined ? address ? 'operand:' + address.join('/') : slot : 'solid:' + solid.id;
+      const base = solid.id === undefined ? address : [encodeSlot(solid.id)];
+      const descend = trail => base && [...base, ...trail];
       const operands = DIO.operandFields(solid).filter(field => record(solid[field]));
       const modifierOperands = stack(solid).filter(entry => typeof entry?.id === 'string' && record(entry.shape));
       const node = { key, kind: 'solid', shape: solid.kind, ...(operand && { operand }), ...(modifier && { modifier }),
-        name: solid.id ?? solid.kind, solid, children: [
-          ...operands.map(field => solidNode(solid[field], [...path, field], field)),
-          ...modifierOperands.map(({ id, shape }) => solidNode(shape, [...path, 'modifiers', encodeSlot(id), 'shape'], 'shape', id))
+        name: solid.label ?? solid.id ?? solid.kind, solid, children: [
+          ...operands.map(field => solidNode(solid[field], [...path,field], descend([field]), field)),
+          ...modifierOperands.map(({ id, shape }) => {
+            const trail = ['modifiers',encodeSlot(id),'shape'];
+            return solidNode(shape,[...path,...trail],descend(trail),'shape',id);
+          })
         ] };
       nodes.set(key, node);
+      if (solid.id === undefined && key !== slot) nodes.set(slot,node);
       if (solid.id !== undefined) byEntity.set(solid.id, key);
       return node;
     }
@@ -214,20 +222,25 @@
       const value = clone(material);
       return edit('Set solid material', targets, solid => ({ ...solid, mat: value }));
     }
-    function paintShadowBand(stroke, { layer = 'diffuse', keys = selectedKeys() } = {}) {
-      const mark = SurfaceLook.shadowBandPaint.stroke(stroke);
+    function paintDiffuse(label, field, mark, { layer = 'diffuse', keys = selectedKeys() }) {
       if (!TargetSelectors.name(layer)) throw new TypeError('A shadow band needs a diffuse layer name');
-      return edit('Paint a shadow band', keys, solid => {
+      return edit(label, keys, solid => {
         const mat = solid.mat, finish = mat?.surface, layers = finish?.layers;
         const diffuse = layers && Object.hasOwn(layers, layer) && layers[layer];
         if (diffuse?.type !== 'diffuse')
           throw new RangeError('Add a named diffuse lighting ramp to the solid material before painting');
-        const strokes = [...(diffuse.shadowBand?.strokes ?? []), mark];
-        if (strokes.length > 256) throw new RangeError('A shadow band supports up to 256 strokes');
+        const strokes = [...(diffuse[field]?.strokes ?? []), mark];
+        if (strokes.length > 256) throw new RangeError('A painted diffuse layer supports up to 256 strokes');
         return { ...solid, mat: { ...mat, surface: { ...finish, layers: {
-          ...layers, [layer]: { ...diffuse, shadowBand: { strokes } }
+          ...layers, [layer]: { ...diffuse, [field]: { strokes } }
         } } } };
       });
+    }
+    function paintShadowBand(stroke, options = {}) {
+      return paintDiffuse('Paint a shadow band', 'shadowBand', SurfaceLook.shadowBandPaint.stroke(stroke), options);
+    }
+    function paintShadeNormal(stroke, options = {}) {
+      return paintDiffuse('Paint a shade normal', 'shadeNormals', SurfaceLook.shadowBandPaint.normals.stroke(stroke), options);
     }
     function setSurfaceState(state, targets = selectedKeys()) {
       const value = clone(state);
@@ -250,6 +263,7 @@
       validate(snapshot(), bindings);
       Object.assign(buildEnv, bindings, { brushSession: A.brushRegions.create() });
       indexScene = undefined;
+      document.checkpointSession();
     }
 
     function setPrefabInstance(id, instance) {
@@ -262,7 +276,7 @@
         document.setEnvironment({ instances: null });
         document.setEnvironment({ instances });
       };
-      if (document.pending()) write();
+      if (document.pending()) document.batchSession(write);
       else document.transact('Edit prefab instance ' + id, write);
     }
 
@@ -282,12 +296,14 @@
         return (previewWorld = build());
       }
       if (!document.pending()) return document.transact('Set breakable groups', write);
-      try {
-        return write();
-      } catch (error) {
-        document.cancel();
-        throw error;
-      }
+      return document.batchSession(() => {
+        try {
+          return write();
+        } catch (error) {
+          document.cancel();
+          throw error;
+        }
+      });
     }
 
     function applyBrush(stroke) {
@@ -333,9 +349,13 @@
       return null;
     }
 
-    return Object.freeze({
+    const editor = Object.freeze({
       snapshot,
       serialize: (space = 2) => JSON.stringify(snapshot(), null, space),
+      fork: () => create(snapshot(),{ env:buildEnv, historyLimit:0 }),
+      sourceDependencies: () => A.bakeCache.signature([
+        buildEnv.assets ?? {},buildEnv.prefabs ?? {},buildEnv.parameterInputs ?? {}
+      ]),
       tree: () => current().tree,
       node: key => current().nodes.get(key),
       selection: selectedKeys,
@@ -361,6 +381,7 @@
       applyBrush,
       setMaterial,
       paintShadowBand,
+      paintShadeNormal,
       setSurfaceState,
       setRole,
       materials: () => freeze(clone(DIO.sceneMaterials(snapshot()))),
@@ -383,7 +404,13 @@
         return document.onChange(({ type, label, revision }) => listener({ type, label, revision, snapshot: snapshot() }));
       }
     });
+    documents.set(editor,{ document, validate });
+    return editor;
   }
 
-  A.sceneEditor = Object.freeze({ create });
+  A.sceneEditor = Object.freeze({
+    create,
+    transactionDocument: editor => documents.get(editor)?.document,
+    validateSnapshot: (editor,snapshot) => documents.get(editor).validate(snapshot)
+  });
 })(KIT);

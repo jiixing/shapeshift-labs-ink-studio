@@ -106,6 +106,7 @@
   // ---------------- what may be written ----------------
   const COMMON = {
     id: 'str',
+    label: 'str',
     surfaceId: 'str',
     surfaceState: 1,
     prefabs: 'list',
@@ -590,6 +591,11 @@
       bad('finish.look.passQuality', error.message);
     }
     try {
+      JointPriority.prepare(look?.jointPriority);
+    } catch (error) {
+      bad('finish.look.jointPriority',error.message);
+    }
+    try {
       SdfAssist.prepare(look?.sdfAssist);
     } catch (error) {
       bad('finish.look.sdfAssist', error.message);
@@ -674,6 +680,11 @@
       PixelStamps.placements(st.finish.pixelStamps, { scenePalette: st.palette, paletteRoles: st.roles });
     } catch (error) {
       bad('finish.pixelStamps', error.message);
+    }
+    if (look?.protectedPixels !== undefined) try {
+      K.protectedPixels.prepare(look.protectedPixels,undefined,{scenePalette:st.palette,paletteRoles:st.roles});
+    } catch (error) {
+      bad('finish.look.protectedPixels',error.message);
     }
     if (st.finish.highlightCels !== undefined) try {
       K.highlightCels.prepare(st.finish.highlightCels, { scenePalette: st.palette, paletteRoles: st.roles });
@@ -819,14 +830,17 @@
           catch (error) { bad(path + '.albedo', error.message); }
         }
         if (m.model !== undefined) {
-          const q = m.model, at = path + '.model', channels = { color: 1, emission: 1, roughness: 1, metallic: 1 };
+          const q = m.model, at = path + '.model', channels = { color: 1, emission: 1, roughness: 1, metallic: 1, normal:1, masks:1 };
           if (!q || typeof q !== 'object' || Array.isArray(q)) bad(at, 'model material channels need an object');
           else {
             keys(q, at, channels);
             for (const [channel, value] of Object.entries(q)) {
               const valid = channel === 'color' || channel === 'emission' ?
                 isVec(value, 3) && value.every(v => v >= 0 && (channel === 'emission' || v <= 1)) :
-                isNum(value) && value >= 0 && value <= 1;
+                channel === 'normal' ? isVec(value,3) && Math.hypot(...value)>0 :
+                channel === 'masks' ? value && typeof value === 'object' && !Array.isArray(value) &&
+                  Object.entries(value).every(([id,n])=>PaintCorrections.idOK(id) && isNum(n) && n>=0 && n<=1) :
+                  isNum(value) && value >= 0 && value <= 1;
               if (!valid) bad(at + '.' + channel, 'invalid model material channel');
             }
           }
@@ -965,7 +979,7 @@
           continue;
         }
         const def = modifierKinds[kind];
-        fields(modifier, at, def, { id: 'str', enabled: 'bool' });
+        fields(modifier, at, def, { id: 'str', label: 'str', enabled: 'bool' });
         if (Object.hasOwn(modifier, 'do')) bad(at + '.do', 'a sculpt modifier uses kind');
         if (kind === 'fold') {
           if ([modifier.polar, modifier.mirror, modifier.repeat].filter(value => value !== undefined).length !== 1)
@@ -1096,7 +1110,8 @@
       if (v.parent !== undefined && !parts.has(v.parent))
         bad('parts.' + p + '.parent', 'no part called "' + v.parent + '"');
       if (v.parent === p) bad('parts.' + p + '.parent', 'a part cannot hang from itself');
-      keys(v, 'parts.' + p, { joint: 1, parent: 1 });
+      if (v.label !== undefined) typeOk(v.label, 'str', 'parts.' + p + '.label');
+      keys(v, 'parts.' + p, { joint: 1, parent: 1, label: 1 });
     }
     const checkedParts = new Set();
     for (const part of Object.keys(partDefinitions)) {
@@ -1462,7 +1477,8 @@
       S = K.sculpt((env.makeSculpt || makeSculpt)(B));
       S.sun = B.norm(st0.sun);
       if (st0.finish.look?.pixel) S.pixel = true;
-      S.keepRenderSdf = keepLightCasters || Boolean(st0.finish.look?.sdfAssist);
+      S.keepRenderSdf = keepLightCasters || Boolean(st0.finish.look?.sdfAssist ||
+        st0.finish.bounceProbes?.geometry?.sdfs?.length && (!st0.finish.bounceProbes.format || st0.finish.bounceProbes.dynamic));
       S.captureAlbedo = Boolean(st0.finish.liveSun) ||
         Array.isArray(st0.finish.look?.renderStages) && st0.finish.look.renderStages.some(rule => rule.stage === 'material');
       if (st0.amb !== undefined) S.amb = st0.amb;
@@ -1559,8 +1575,9 @@
       makeSolid = (s, held) => {
         const modifiers = activeModifiers(s);
         const o = { res: s.res, objectId: s.part ?? s.id };
-        if (s.id || s.surfaceId || s.tags?.length || s.prefabs?.length) o.target = {
-          ...(s.id && { entity: s.id }), ...(s.surfaceId && { surface: s.surfaceId }), ...(s.tags?.length && { tags: s.tags }),
+        if (s.id || s.part || s.surfaceId || s.tags?.length || s.prefabs?.length) o.target = {
+          ...(s.id && { entity: s.id }), ...(s.part && { part:s.part }),
+          ...(s.surfaceId && { surface: s.surfaceId }), ...(s.tags?.length && { tags: s.tags }),
           ...(s.prefabs?.length && { prefabs: s.prefabs })
         };
         if (s.res === undefined) delete o.res;
@@ -1733,7 +1750,7 @@
     const moving = spec.solids.filter(s => s.part), authoredBounds = new Map();
     const staticBake = cache && !moving.length && !effects.length && !spec.tap && !marks &&
       !presentation.breakables && !S.keepRenderSdf && !st0.finish.paint && !globalThis.INK_DECAL_NEXT &&
-      !globalThis.INK_RETAIN_RENDER_SDF && !globalThis.INK_RAMPS;
+      !globalThis.INK_RETAIN_RENDER_SDF && !globalThis.INK_RETAIN_REFERENCE_SDF && !globalThis.INK_RAMPS;
     const bakeKey = staticBake ? cacheAPI.sceneKey(spec, st0,
       activeSolids.filter(s => s.kind === 'mesh').map(s => env.assets[s.asset])) : undefined;
     const baked = staticBake && cache.read('splats', bakeKey, cacheAPI.isPacked);

@@ -35,7 +35,7 @@
       const {strip,send,processor,parameter}=row.target;
       let target;
       if (fields(row.target,['strip','send','parameter']) && id(strip) && get(strips,strip)) {
-        if (send===undefined && ['fader','pan'].includes(parameter)) target=strips[strip];
+        if (send===undefined && ['inputGain','fader','pan'].includes(parameter)) target=strips[strip];
         if (id(send) && parameter==='level') target=get(strips[strip].sends ?? {},send);
       }
       if (fields(row.target,['processor','parameter']) && id(processor) && id(parameter) &&
@@ -49,7 +49,7 @@
         ids.add(point.id);
         return {at:point.at,value:point.value};
       })};
-      const [low,high]=parameter==='pan' ? [-1,1] : parameter==='fader' ? [0,4] : send ? [0,2] : [-1e9,1e9];
+      const [low,high]=parameter==='pan' ? [-1,1] : parameter==='fader' ? [0,4] : parameter==='inputGain' ? [0,1] : send ? [0,2] : [-1e9,1e9];
       time.lane(lane,0,low,high,'session automation '+name);
       target[parameter]=lane;
     }
@@ -120,8 +120,9 @@
       for (const [take,source] of takes) {
         const shared=editorial!==undefined && fields(source,['clips','sourceEdits','track']) && Array.isArray(source.clips) &&
           (source.track===undefined || id(source.track));
-        const valid=shared || fields(source,['asset','at','fromSample','toSample']) && id(source.asset) ||
+        const valid=shared || fields(source,['silence']) && source.silence===true || fields(source,['asset','at','fromSample','toSample']) && id(source.asset) ||
           fields(source,['editorial','track','at']) && record(source.editorial) && (source.track===undefined || id(source.track)) ||
+          fields(source,['kit','performance','at']) && record(source.kit) && record(source.performance) ||
           fields(source,['motif','at']) && fields(source.motif,['source','score','plan','role']) &&
             id(source.motif.source) && id(source.motif.score) && record(source.motif.plan) &&
             ['raw','lead','accent','texture'].includes(source.motif.role);
@@ -148,11 +149,11 @@
     check(choices.every((row,i)=>i===0 || choices[i-1].lane!==row.lane || choices[i-1].to<=row.from),
       'Comp selections on one lane may not overlap');
     const desk=clone(session.mixer ?? {output:'master',strips:{master:{}}});
-    check(fields(desk,['output','strips','processors','taps','tail','peakPolicy']) && id(desk.output),
+    check(fields(desk,['output','strips','processors','taps','tail','peakPolicy','focusTrack']) && id(desk.output),
       'Use a native mixer desk keyed by session lane names');
     const strips=Object.fromEntries(table(desk.strips,48,'mixer strips')), processors=desk.processors ?? {};
     check(get(strips,desk.output) && !sourceLanes.includes(desk.output) && Object.values(strips).every(row=>
-      fields(row,['inserts','fader','pan','sends','output'])),'Place audio on session lanes and use a separate master strip');
+      fields(row,['inserts','inputGain','fader','pan','sends','output'])),'Place audio on session lanes and use a separate master strip');
     for (const name of sourceLanes) strips[name] ??= {};
     table(processors,64,'processors');
     automation(session,strips,processors,time);
@@ -174,6 +175,28 @@
   }
   function phraseTake(plan,lane,take,phrase) {
     return plan.producers.get(take)?.score.tracks[lane]?.phrases.find(entry=>entry.raw.id===phrase);
+  }
+
+  function borrowPhrase(next,row,plan) {
+    const {lane,take,phrase,source,from,to,targetTake=reference,activate=true,fadeSamples=0}=row;
+    const contour=P.musicPhraseContour;
+    check(fields(row,['op','lane','take','phrase','source','from','to','targetTake','timing','accent','breath','activate','fadeSamples']) &&
+      id(lane) && id(take) && id(phrase) && id(targetTake) && take!==reference && take!==targetTake &&
+      plan.pins[lane]!=='all' && typeof activate==='boolean' && integer(fadeSamples,0,plan.frames),
+    'Borrow into a named alternate take on an unpinned destination melody');
+    contour.validateSource(source);
+    const played=plan.producers.get(source.take), written=plan.producers.get(source.reference ?? reference);
+    const target=plan.producers.get(targetTake), original=target?.source.tracks[lane];
+    check(played && (source.grid!==undefined || written) && original,'Unknown donor, written reference or destination take');
+    const saved=contour.draft(phrase,source,played.score,written?.score,lane,{from,to},target.score,row);
+    const revision=clone(get(next.takes ?? {},targetTake) ?? {});
+    revision.tracks ??= {};
+    revision.tracks[lane]={...get(revision.tracks,lane),phrases:[...(original.phrases ?? []),saved]};
+    next.takes ??= {};
+    check(!Object.hasOwn(next.takes,take) || signature(next.takes[take])===signature(revision),
+      'Use a new take name for a different borrowed performance');
+    next.takes[take]=revision;
+    return activate ? {lane,take,from:{beat:from},to:{beat:to},fadeSamples} : undefined;
   }
 
   function editPhrase(next,row,plan) {
@@ -262,7 +285,8 @@
     const next=clone(session);
     for (const row of changes) {
       let activation;
-      if (['record-phrase','phrase-point','comp-phrase'].includes(row?.op))
+      if (row?.op==='borrow-phrase') activation=borrowPhrase(next,row,plan);
+      else if (['record-phrase','phrase-point','comp-phrase'].includes(row?.op))
         activation=editPhrase(next,row,plan);
       else if (row?.op==='comp') {
         check(fields(row,['op','lane','take','from','to','fadeSamples']),'Invalid comp edit');
@@ -286,6 +310,21 @@
         next.pins ??= {};
         if (row.mode===null) delete next.pins[row.lane];
         else next.pins[row.lane]=row.mode;
+      } else if (row?.op==='revise-score') {
+        check(fields(row,['op','revision']) && record(row.revision) && row.revision.unpin===undefined,
+          'Supply a production revision that respects session pins');
+        next.production=clone(A.revise(next.production,row.revision,instruments(assets,next.production,row.revision)));
+      } else if (row?.op==='audio-select') {
+        const lane=get(next.audio ?? {},row.lane);
+        check(fields(row,['op','lane','take']) && id(row.lane) && id(row.take) && lane && get(lane.takes,row.take) &&
+          (plan.pins[row.lane]!=='all' || lane.take===row.take),'Choose an existing take on an editable audio lane');
+        lane.take=row.take;
+      } else if (row?.op==='pad-events') {
+        check(fields(row,['op','lane','take','edits']) && id(row.lane) && id(row.take) &&
+          plan.pins[row.lane]!=='all','Address an editable kit take');
+        const lane=get(next.audio ?? {},row.lane), take=lane && get(lane.takes,row.take);
+        check(take?.kit,'Unknown sample kit take');
+        take.performance=M.padPattern.edit(take.performance,row.edits);
       } else if (row?.op==='score-take') {
         check(fields(row,['op','take','revision']) && id(row.take) && row.take!==reference && record(row.revision),
           'Supply a named production revision');
@@ -359,6 +398,26 @@
         const pitches=rows=>rows.map(({address,midi})=>[address,midi]).sort((a,b)=>signature(a[0]).localeCompare(signature(b[0])));
         const key=plan.pins[row.lane]==='pitch' ? pitches : rows=>rows;
         check(signature(key(before))===signature(key(after)), 'Edit changes pinned material on '+row.lane);
+      }
+      if (row.op==='revise-score') {
+        const before=plan.producers.get(reference), after=updated.producers.get(reference);
+        check(signature(Object.keys(before.score.tracks))===signature(Object.keys(after.score.tracks)) &&
+          plan.frames===updated.frames && signature(plan.map)===signature(updated.map),
+        'A session score revision must keep its tracks and clock');
+        for (const [lane,mode] of Object.entries(plan.pins)) if (Object.hasOwn(before.score.tracks,lane)) {
+          const track=before.source.tracks[lane], revised=after.source.tracks[lane];
+          const pitches=score=>addressed(score,lane).map(({address,midi,beat})=>[address,beat,midi])
+            .sort((a,b)=>signature(a[0]).localeCompare(signature(b[0])));
+          const voice=entry=>{
+            const {score}=entry, duck=score.tracks[lane].mix.duck;
+            return [score.events[lane],score.cue?.perTrack[lane],score.gain,score.room,score.cue?.roomCuts,
+              score.arrangement.score.endFade,duck && score.events[duck.from].map(({time,velocity})=>[time,velocity])];
+          };
+          check(mode==='pitch' ? signature(pitches(before.score))===signature(pitches(after.score)) :
+            signature([track,before.source.patches[track.patch],voice(before)])===
+              signature([revised,after.source.patches[revised.patch],voice(after)]),
+          'Revision changes pinned score material on '+lane);
+        }
       }
       if (row.op==='editorial') check(plan.pins[row.lane]!=='all','Lane is pinned '+row.lane);
       if (row.op==='picture' || row.op==='world-spot') for (const lane of plan.audio.keys()) {

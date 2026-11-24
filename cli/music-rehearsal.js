@@ -1,12 +1,13 @@
 const fs=require('node:fs'),path=require('node:path'),WAV=require('./wav.js');
-const {write,json}=require('./asset-files.js'),{timelineBank}=require('./music-production.js');
+const {write,json}=require('./asset-files.js'),{timelineBank,readProductionAssets}=require('./music-production.js');
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const relative=(file,ref)=>path.resolve(path.dirname(path.resolve(file)),ref);
 
 module.exports=function command([mode,file,config,traceFile],opt,kit) {
+  if (mode==='compare') return require('./music-path-comparison.js')([file,config,traceFile],opt,kit);
   const {check,fields}=kit.KIT.procedural.musicInstruments, R=kit.KIT.music.production.rehearsal;
   check(typeof file==='string' && ['capture','capture-score','run','regression','keep'].includes(mode),
-    'Use music rehearsal capture, capture-score, run, regression or keep');
+    'Use music rehearsal capture, capture-score, compare, run, regression or keep');
   const out=typeof opt.out==='string' ? path.resolve(opt.out) : undefined;
   const output=value=>{
     if (out) json(out,value);
@@ -24,7 +25,7 @@ module.exports=function command([mode,file,config,traceFile],opt,kit) {
   }
   check(config && out,'Use a rehearsal settings file and --out');
   const {sources,timeline,paths}=timelineBank(recipe,file);
-  const assets=Object.fromEntries(Object.entries(paths).map(([name,at])=>[name,WAV.read(at)]));
+  const assets=readProductionAssets(paths,kit.KIT.procedural);
   const settings=read(config);
   if (mode==='keep') {
     const selected=R.revise(sources,timeline,settings,assets);

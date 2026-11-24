@@ -551,7 +551,7 @@
         radius = Math.max(radius, K.V.dist(center, locations[j]) + parts[j].radius);
       // Use the largest local nearest-neighbour pitch, so an isolated strand
       // can hold the detailed representation even if the rest are clustered.
-      if (settings.pitch === undefined && (i === settings.samples || i % Math.ceil(settings.samples / 5) === 0)) {
+      if (settings.pitch === undefined && !settings.coverage && (i === settings.samples || i % Math.ceil(settings.samples / 5) === 0)) {
         for (let j = 0; j < locations.length; j++) {
           let nearest = Infinity;
           for (let k = 0; k < locations.length; k++) if (j !== k) nearest = Math.min(nearest, K.V.dist(locations[j], locations[k]));
@@ -566,9 +566,10 @@
     return { points, radius, pitch: settings.pitch ?? Math.max(1e-6, pitch) };
   }
 
-  function aggregatePlan(plan, settings, colors, maxSegments) {
+  function aggregatePlan(plan, settings, colors, maxSegments, shadow = false) {
     const parts = plan.strands.filter(strand => strand.rows.length);
-    check(parts.length >= 2 && parts.length <= 256, 'an aggregate needs 2 to 256 nonempty strands in the same source');
+    check(parts.length >= (shadow ? 1 : 2) && parts.length <= 256, shadow ?
+      'a shadow group needs 1 to 256 nonempty strands in the same source' : 'an aggregate needs 2 to 256 nonempty strands in the same source');
     const coarse = aggregateGuide(parts.map(strand => ({ points: strand.knots, radius: strand.maxRadius })), settings);
     check(coarse, 'cannot form a continuous aggregate; group strands along the same direction');
     let area = 0, opacity = 0, weight = 0;
@@ -576,16 +577,19 @@
     for (const { rows } of parts) for (const row of rows) {
       const footprint = K.V.dist(row.from, row.to) * row.radius;
       area += footprint;
-      opacity += row.opacity * footprint;
+      const blocker = shadow && plan.shadowTransmittance !== undefined && row.opacity > 0 ? 1-plan.shadowTransmittance : row.opacity;
+      opacity += blocker * footprint;
       weight += row.opacity * footprint;
       for (let k = 0; k < 3; k++) pigment[k] += row.shade[k] * row.opacity * footprint;
     }
     const color = settings.color ?? pigment.map(value => Math.round(value / (weight || 1)));
     const proxy = prepare({ kind: 'path', id: 'aggregate', points: coarse.points }, {
-      radius: coarse.radius, color, opacity: 0, edge: 'hard', object: plan.object,
+      radius: coarse.radius, color, opacity: 0, edge: shadow ? plan.edge : 'hard', object: plan.object,
       material: plan.material, target: plan.target, maxSegments
     }, colors, true);
-    return { ...coarse, settings, plan: proxy, opacity: settings.opacity ?? opacity / area };
+    const proxyArea = proxy.strands.reduce((sum, strand)=>sum+strand.length*coarse.radius,0);
+    const proxyOpacity = settings.coverage ? Math.min(1,opacity/proxyArea) : opacity/area;
+    return { ...coarse, settings, plan: proxy, opacity: settings.opacity ?? proxyOpacity };
   }
 
   function simplificationRuns(strands, ranges) {
@@ -639,13 +643,28 @@
     const timing = timingProgram(source, options);
     const pattern = CurvePattern.prepare(options.pattern, palette, options.paletteRoles);
     const lod = CurveLod.prepare(options.lod);
-    let shadows = 0;
+    let shadows = 0, shadowGroup, shadowTransmittance;
     if (options.shadow !== undefined && options.shadow !== false) {
       const shadow = options.shadow;
       check(shadow && Object.getPrototypeOf(shadow) === Object.prototype && Object.keys(shadow).every(key =>
-        ['cast', 'receive'].includes(key) && typeof shadow[key] === 'boolean'), 'shadow needs boolean cast and receive settings');
+        ['cast', 'receive', 'group', 'transmittance'].includes(key)) && ['cast','receive'].every(key =>
+        shadow[key] === undefined || typeof shadow[key] === 'boolean'), 'shadow needs boolean cast and receive settings');
       if (shadow.cast) shadows |= CurveSplat.castShadow;
       if (shadow.receive) shadows |= CurveSplat.receiveShadow;
+      shadowTransmittance = shadow.transmittance;
+      check(shadowTransmittance === undefined || shadow.cast && finite(shadowTransmittance,0,1),
+        'shadow transmittance needs cast and a light fraction in [0, 1]');
+      if (shadow.group !== undefined && shadow.group !== false) {
+        const options = shadow.group === true ? {} : shadow.group;
+        check(shadow.cast && options && Object.getPrototypeOf(options) === Object.prototype &&
+          Object.keys(options).every(key=>['samples','maxError','width','opacity'].includes(key)),
+        'shadow group needs cast and optional samples, maxError, width and opacity');
+        const {samples=12,maxError=1.5,width,opacity} = options;
+        check(Number.isSafeInteger(samples) && samples>=4 && samples<=64 && finite(maxError,.01,32) &&
+          (width===undefined || finite(width,2e-6,200)) && (opacity===undefined || finite(opacity,0,1)),
+        'invalid shadow group settings');
+        shadowGroup={samples,maxError,width,opacity,coverage:true};
+      }
     }
     const chart = pattern?.chart && source?.kind === 'surface' && surfaceChart(source.chart);
     const chartWidth = chart && chartWidthSampler(chart);
@@ -683,7 +702,7 @@
       const chartNormals = framed && up === undefined && section !== undefined ? strand.normals : undefined;
       const initial = up ?? strand.up ?? [0, 1, 0];
       check(!framed || point(initial) && K.V.len(initial) > 1e-8, 'invalid path frame up vector');
-      const frames = (framed && (!retainedFrame || retain) || chartWidth && retain) ? K.curve.frames(knots, Array.from(initial)) : null;
+      const frames = (retain || framed && !retainedFrame) ? K.curve.frames(knots, Array.from(initial)) : null;
       const rest = retain && K.procedural.data.freeze({
         id, index: strand.index ?? index, family: strand.family, clump: strand.clump, points: knots, closed, autoClosed: Boolean(autoClosed),
         up: Array.from(initial), ...(strand.uvs && { uvs: strand.uvs.map(v => Array.from(v)) }),
@@ -785,24 +804,31 @@
               pattern: patternRow,
               ...(timing && { timeRange: [(distance + previous * length) / total, (distance + next * length) / total,
                 times ? mix(times[i], times[i + 1], previous) : 0, times ? mix(times[i], times[i + 1], next) : 0] }),
-              ...(retain && { attachment: { segment: i, first: previous, last: next, roll, twist: twistAngle, patternRoll } }) });
+              ...(retain && { attachment: { segment: i, first: previous, last: next, roll, twist: twistAngle, patternRoll,
+                restMajor:profile?.major ?? majorAxis(K.V.lerp(frames[i].N,frames[i+1].N,middle),
+                  K.V.norm(K.V.sub(end,start)),0) } }) });
           }
           previous = next;
         } while (previous < 1);
         distance += length;
       }
-      return { id, rows, rest, length: total, followNormals: Boolean(chartNormals), ...(lod?.aggregate && { knots,
+      return { id, rows, rest, length: total, followNormals: Boolean(chartNormals), ...((lod?.aggregate || shadowGroup) && { knots,
         maxRadius: rows.reduce((best, row) => Math.max(best, row.radius), 0) }) };
     });
-    const plan = { object, material, target, edge, strands, segments, examined, timing, pattern, shadows, lod };
+    const plan = { object, material, target, edge, strands, segments, examined, timing, pattern, shadows, lod, shadowTransmittance,
+      engraving:options.engraving };
     if (lod?.aggregate) {
-      plan.proxy = aggregatePlan(plan, lod.aggregate, palette, maxSegments - examined);
+      plan.proxy = aggregatePlan(plan, lod.aggregate, palette, maxSegments - plan.examined);
       plan.examined += plan.proxy.plan.examined;
+    }
+    if (shadowGroup) {
+      plan.shadowProxy = aggregatePlan(plan,shadowGroup,palette,maxSegments-plan.examined,true);
+      plan.examined += plan.shadowProxy.plan.examined;
     }
     return plan;
   }
 
-  function emit(builder, plan, aggregate = false) {
+  function emit(builder, plan, isProxy = false) {
     check(typeof builder?.curveSplat === 'function', 'expected a native splat builder');
     const first = builder.count(), threads = [];
     const groups = plan.edge === 'hard' ? plan.strands.filter(strand => strand.rows.length).length : 0;
@@ -813,33 +839,36 @@
       const start = builder.count();
       const group = nextGroup && rows.length ? nextGroup++ : undefined;
       const strand = rows.length && builder.registerCurveStrand?.({ name: id, object: plan.object,
-        material: plan.material, length, ...(aggregate && { aggregate: true }) });
-      for (const { from, to, shade, radius, opacity, profile, clips, finish, lighting, timeRange, pattern, arc } of rows)
+        material: plan.material, length, ...(isProxy && { aggregate: true }) });
+      for (const { from, to, shade, radius, opacity, profile, clips, finish, lighting, timeRange, pattern, arc, attachment } of rows)
         builder.curveSplat(from, to, radius, shade, opacity, profile, plan.edge, group, clips, finish, lighting,
-          timing && [timing, ...timeRange], pattern && { ...pattern, program }, plan.shadows, strand ? [strand, ...arc] : undefined);
+          timing && [timing, ...timeRange], pattern && { ...pattern, program }, plan.shadows, strand ? [strand, ...arc] : undefined,
+          plan.shadowTransmittance,attachment?.restMajor);
       const end = builder.count();
+      if (end>start && plan.engraving!==undefined) builder.describeEngraving?.(start,end,plan.engraving);
       builder.describeSplats?.(start, end, {
         object: plan.object, material: plan.material, target: { entity: plan.object, ...plan.target, surface: id }
       });
       threads.push({ id, first: start, end });
     }
-    let proxy, record;
-    if (plan.lod) {
-      const runs = plan.lod.simplify ? simplificationRuns(plan.strands, threads) : [];
-      let aggregate;
-      if (plan.proxy) {
-        proxy = emit(builder, plan.proxy.plan, true);
-        aggregate = { detail: threads.filter(thread => thread.end > thread.first).map(thread => [thread.first, thread.end]),
-          proxy: [proxy.first, proxy.end], pitch: plan.proxy.pitch, opacity: plan.proxy.opacity,
-          transition: plan.proxy.settings.transition };
-        if (plan.lod.simplify) runs.push(...simplificationRuns(plan.proxy.plan.strands, proxy.threads));
-      }
-      if (runs.length || aggregate) {
-        record = { runs, simplify: plan.lod.simplify, aggregate };
-        builder.registerCurveLod(record);
-      }
+    const runs = plan.lod?.simplify ? simplificationRuns(plan.strands,threads) : [];
+    let segments=plan.segments, record;
+    function proxyRange(proxy, simplify) {
+      const result=emit(builder,proxy.plan,true);
+      segments+=result.segments;
+      if (simplify) runs.push(...simplificationRuns(proxy.plan.strands,result.threads));
+      return {detail:threads.filter(thread=>thread.end>thread.first).map(thread=>[thread.first,thread.end]),
+        proxy:[result.first,result.end],opacity:proxy.opacity};
     }
-    return { first, end: builder.count(), threads, segments: plan.segments + (proxy?.segments ?? 0), ...(record && { lod: record }) };
+    let aggregate, shadow;
+    if (plan.proxy) aggregate = { ...proxyRange(plan.proxy,plan.lod.simplify), pitch:plan.proxy.pitch,
+      transition:plan.proxy.settings.transition, coverage:plan.proxy.settings.coverage };
+    if (plan.shadowProxy) shadow = { ...proxyRange(plan.shadowProxy), maxError:plan.shadowProxy.settings.maxError };
+    if (runs.length || aggregate || shadow) {
+      record={runs,simplify:plan.lod?.simplify,aggregate,shadow};
+      builder.registerCurveLod(record);
+    }
+    return {first,end:builder.count(),threads,segments,...(record && {lod:record})};
   }
 
   function draw(builder, source, options) {
@@ -858,7 +887,7 @@
       const data = world?.anim?.bones && world.rest ? world.rest : world?.data;
       check(data instanceof Float32Array && world.count >= ranges.end && data.length >= ranges.end * 16,
         'a bound strand must be posed on its original splat range');
-      const posed = plan.strands.map(({ rest, rows: rowsOfStrand, followNormals }) => {
+      const posed = plan.strands.map(({ rest, followNormals }) => {
         const result = sample(rest, { world, ...context });
         const current = points(Array.isArray(result) ? result : result?.points);
         check(current.length === rest.points.length &&
@@ -870,12 +899,10 @@
           'invalid posed normals, up vector or active spans');
         const ends = current.slice(1).map((p, i) => K.V.sub(p, current[i]));
         const lengths = ends.map(v => K.V.len(v));
-        const needsFrames = rowsOfStrand.some(row => row.profile) && !(normals && followNormals) ||
-          !normals && rowsOfStrand.some(row => row.pattern?.side);
-        const frames = needsFrames ? K.curve.frames(current, up) : null;
+        const frames = K.curve.frames(current, up);
         return { current, normals, active, ends, lengths, frames, followNormals };
       });
-      for (let i = ranges.first; i < (ranges.lod?.aggregate?.proxy[0] ?? ranges.end); i++)
+      for (let i = ranges.first; i < (ranges.lod?.aggregate?.proxy[0] ?? ranges.lod?.shadow?.proxy[0] ?? ranges.end); i++)
         check(CurveSplat.isRow(data, i * 16) && !stage?.rig?.bid?.[i],
           'bound row must keep its curve payload and use only its curve driver');
       plan.strands.forEach(({ rows: entries }, index) => {
@@ -905,6 +932,11 @@
               profile = { ...profile, major: majorAxis(facing, axis, chart ? twist : roll) };
             }
             const geometry = CurveSplat.carrier(from, to, row.radius, profile);
+            if (world.curveRest) {
+              const u=profile?.major ?? majorAxis(K.V.lerp(frames[segment].N,frames[segment+1].N,(first+last)*.5),
+                geometry.axis,0);
+              world.curveRest.set(u,indexOfRow*16+12);
+            }
             data.set(geometry.center, q);
             if (geometry.normal) world.renderMetadata?.normals?.set(geometry.normal, indexOfRow * 3);
             for (let k = 0; k < slots.length; k++) data[q + slots[k]] = geometry.covariance[k];
@@ -929,15 +961,15 @@
           if (rows) rows[indexOfRow >> 9] = 1;
         });
       });
-      if (plan.proxy) {
-        const descriptor = ranges.lod.aggregate;
+      function poseProxy(proxy, descriptor) {
+        if (!proxy) return;
         const parts = posed.flatMap(({ current }, i) => plan.strands[i].rows.length ?
           [{ points: current, radius: plan.strands[i].maxRadius }] : []);
-        const coarse = aggregateGuide(parts, plan.proxy.settings);
-        if (coarse) descriptor.pitch = coarse.pitch;
+        const coarse = aggregateGuide(parts,proxy.settings);
+        if (coarse && descriptor.pitch !== undefined) descriptor.pitch = coarse.pitch;
         const [start, end] = descriptor.proxy;
         for (let i = start; i < end; i++) {
-          const { segment, first, last } = plan.proxy.plan.strands[0].rows[i - start].attachment;
+          const { segment, first, last } = proxy.plan.strands[0].rows[i - start].attachment;
           const q = i * 16;
           const from = coarse && K.V.lerp(coarse.points[segment], coarse.points[segment + 1], first);
           const to = coarse && K.V.lerp(coarse.points[segment], coarse.points[segment + 1], last);
@@ -952,6 +984,8 @@
           if (rows) rows[i >> 9] = 1;
         }
       }
+      poseProxy(plan.proxy,ranges.lod?.aggregate);
+      poseProxy(plan.shadowProxy,ranges.lod?.shadow);
       return ranges;
     }
     return { ...ranges, pose, post: (dt, time, stage, clock) => pose(stage.W, { stage, time, dt, clock }) };
@@ -964,6 +998,7 @@
     const { seed = 1, background = '#172332', palette = [], paletteRoles, camera = {}, look = {}, liveSun, charts = {},
       atmosphere } = recipe;
     CurveWidth.prepare(look?.curveWidth);
+    CurveSubdivision.prepare(look?.curveSubdivision);
     check(Number.isSafeInteger(seed) && Array.isArray(palette) && palette.length <= 255, 'invalid seed or palette');
     const colors = [packed(background), ...Array.from(palette, packed)];
     check(charts && Object.getPrototypeOf(charts) === Object.prototype && Object.keys(charts).length <= 1024,
@@ -1005,5 +1040,6 @@
     });
   }
 
-  K.curveSplats = Object.freeze({ format, segmentLimit, lightingPresets, bundle, surfacePath, carve, draw, bind, drivers: CurvePoseDrivers, world });
+  K.curveSplats = Object.freeze({ format, segmentLimit, lightingPresets, bundle, surfacePath, carve, draw, bind,
+    grow:CurveGrowth.grow, renderKernel: CurveSplat, subdivision: CurveSubdivision, strandLod: CurveLod, bakedRibbon: CurveRibbons.ribbon, drivers: CurvePoseDrivers, world });
 })(KIT);

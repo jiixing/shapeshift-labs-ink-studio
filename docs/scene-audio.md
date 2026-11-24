@@ -21,6 +21,8 @@ and playback rate. Sound world events use their committed simulation tick.
 Adaptive cues use the score's authored musical onset, including cues
 delivered between picture frames.
 
+[Room response probes](room-response.md) can add position-dependent reverberation to spatial export and carry tails into a cropped range. A [pinned binaural profile](pinned-binaural.md) applies the same headset responses in spatial preview and WAV delivery. [Directional emitters](directional-audio.md) apply source-local radiation before panning in preview and export. [Per-source propagation](propagation-doppler.md) aligns delayed arrivals and moving-emitter pitch in the scene soundtrack. [Stick-slip contacts](stick-slip-audio.md) synthesize friction release pulses from the recorded world readings.
+
 Feed the aligned WAV files into [per-stem control signals](graph-media.md#per-stem-control-signals) to drive visuals from independent envelopes, bands, and triggers.
 
 Use [audio editorial](audio-editorial.md) to spot a transient inside a take,

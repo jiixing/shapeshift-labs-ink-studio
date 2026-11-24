@@ -930,6 +930,8 @@ outside the original image.
 | `fx.paletteCycle` | [Rotate named palette ranges](#cycle-an-indexed-palette) independently. Outputs the display image, unchanged indices, and rotated palette. |
 | `fx.paletteFault` | Swap pairs of palette slots, or force selected slots to a fixed one. Use `options.mask` to localize edits. Outputs RGBA `value` and edited `indices`. |
 | `fx.trackRegions` | Track connected regions across a sequence of `frames`. Outputs persistent region records, ID `labels`, lineage `events`, source `frame`, and source `time`. |
+| `fx.moveRegions` | [Move painted regions by ID](raster-region-move.md) with independent transforms and depth. Outputs the image, visible IDs, and gaps exposed by the move. |
+| `fx.relight` | [Light a masked raster receiver](raster-relight.md) from a separate colored emission pass. Outputs a compositable display layer, linear RGB irradiance, and scalar intensity. |
 
 Both blurs filter premultiplied colour and alpha with `edge` set to
 `clamp`, `transparent`, or `wrap`. Kernel blur defaults to clamped edges.
@@ -1428,6 +1430,7 @@ either axis with `edgeU` or `edgeV`.
 
 | Node | Authoring |
 | --- | --- |
+| `warp.curveMap` | Build [curve-local UVs and coordinate planes](curve-raster-map.md) from a path in art pixels. Set a full `strokeWidth` or a width per vertex and choose `nearest`, `first` or `last` at crossings. |
 | `warp.mesh` | Set `control.from` and `control.to` to corresponding normalized 2D landmarks. Supply `triangles` as triples of indices or a flat index buffer. Each destination triangle pulls pixels from its source triangle. Later triangles win overlaps. Uncovered pixels are transparent. |
 | `warp.scanlines` | Deform a registered raster in asset space with [source-row offsets and scales](#deform-registered-scanlines). Returns the result, UV field, relocated anchors, and remapped image planes. |
 | `warp.grid` | Set `control.columns`, `rows`, and row-major `points` for the destination lattice. The source is a regular grid. |
@@ -1820,6 +1823,7 @@ port to hide a layer during that hold.
 | Operation | Inputs and outputs |
 | --- | --- |
 | `anim.keyframes` | Sample named `channels` from `keys`. A key has `time`, a named `value` for each channel, and optional `ease`. Uses Ink’s scalar, vector, angle, positive, quaternion and orientation interpolation. Returns the channel record and track duration. |
+| `anim.cueTrack` | Sample a scalar track whose keys use absolute `at` seconds or a name in the `cues` time table and an optional signed `offset`. Resolved keys must increase in lane order within `duration`. See [editable effect clips](effect-clips.md). |
 | `anim.clock` | Map the project clock to `options.range`, with `delay`, `rate`, `reverse`, and a `mode` of `hold`, `loop` or `pingpong`. Add `phase` and `cues` for authored layer clocks. Returns mapped time, progress, playback direction and activity. |
 | `anim.stagger` | Sample several clocks with `count`, `options.interval` and `offset`. `reverseOrder` switches which item starts first. Returns mapped times and per-item clock records. |
 | `anim.frame` | Select from raster `frames` with `fps` and a half-open interval from `first` to `end` in frame indices. Accepts the same delay, rate, reverse and looping controls. |
@@ -2082,17 +2086,17 @@ Cloth and strands also accept Z and a two-axis `projection` offset per Z unit.
 | `grain` | A falling-cell material solver with seeded emitters, diagonal settling, optional initial rectangular fills and a grain palette. |
 | `rigid` | Ink’s native rigid-body mechanics rasterized from an XY camera. Author boxes, fixed colliders, gravity, floor and tick-indexed `impulses`. A body specifies `id`, pixel `at`, pixel `size` and optional `velocity`, `spin`, `mass` and `fixed`. |
 | `flip` | Planar free-surface liquid with raster `fill` regions, gravity, particle density, pressure iterations and optional baffles. `flip: 0` gathers PIC velocities, `flip: 1` applies FLIP velocity increments, and intermediate values blend the two. |
+| `mpm` | Planar material points with an affine particle-grid transfer, compressible fluid and fixed-corotated elastic materials. Use [`sim.mpm`](material-point-impacts.md) for per-material passes, compression and contact, with timed impulses and moving masks. |
 | `feedback` | The equivalent recipe for `anim.feedback`, with the input frame array in `settings.frames`. |
 
-Particles, smoke, grain and liquid accept `walls` as
+Particles, smoke, grain, FLIP and MPM accept `walls` as
 `[x, y, width, height]` rectangles or an aligned raster `mask`. Solid pixels
 are selected by `maskChannel` and `maskThreshold` (alpha at least 128 by
 default). Cloth and strands accept spherical 3D colliders by `at` and `r`.
 Settings are captured in each recipe. Changes to a recipe start a new solve.
 
 Every workflow returns transparent RGBA `value`, a numeric `field`,
-`points`, `report` and a portable `checkpoint`. The field reports smoke or
-liquid density, grain occupancy, or alpha coverage for the other workflows.
+`points`, `report` and a portable `checkpoint`. The field reports smoke, FLIP or MPM density, grain occupancy, or alpha coverage for the other workflows.
 Point records expose positions and available velocities or pin state. The
 report records the sampled tick, checkpoint used, and replayed steps. The
 liquid report also includes divergence before and after pressure projection.
@@ -2115,7 +2119,7 @@ const branch = rasterSimulation.session(undefined, { checkpoint })
 const frame = branch.seek(1.25)
 ```
 
-The Tideworks review renders all eight workflows. A second CLI run restores
+The Tideworks review renders eight workflows. A second CLI run restores
 three checkpoints and verifies that their PNGs match the original graph
 byte for byte.
 
@@ -2123,6 +2127,34 @@ byte for byte.
 node examples/raster-simulations.cjs tideworks-review
 ink-studio graph run tideworks-review/resume-tideworks.json --out tideworks-review/branch
 ```
+
+## Procedural pixel effects
+
+Use [the Effects Atlas](../examples/pixel-effects-atlas/README.md) to find
+examples of these native-grid generators and the material-point solver.
+`ink-studio graph describe <operation> --example` prints runnable inputs.
+
+| Node | Controls and outputs |
+| --- | --- |
+| `proc.sphereMap` | Set pixel center, radius, and yaw, pitch and roll in radians. Exports UV and coverage, view-space normals, front-hemisphere depth, and banded illumination. |
+| `proc.projectSphere` | Map an equirectangular image onto that sphere. Longitude wraps and latitude clamps. Nearest and linear sampling are available. Reuse depth, UV and illumination to layer separate terrain, cloud and atmospheric passes. |
+| `proc.fieldSprite` | Raymarch a bounded signed field at an orthographic pose. Connect [graph-authored material slots](field-sprite-materials.md). Outputs RGBA, depth, normal, hit position, illumination, coverage, and material ID. |
+| `proc.fieldMaterial` / `proc.fieldSpriteShade` | Prepare object-space textures, field masks, and palette ramps. Repaint a shared surface trace to compare finishes on the same geometry. |
+| `proc.discharge` | Trace a seeded, continuously jittering branch path through authored pixel points. Exports paths, filament, colored fringe, halo, and the composite. All parts share the same looping clock. |
+| `proc.cellEdges` | Sample seeded jittered Voronoi tiles. Exports distance to the closest boundary, distance to the owning site, and a stable lattice index. Drive the geometry or color of a seam independently of each tile. |
+| `proc.flowPlume` | Animate a taper and turbulent advection along an authored axis. Use the width profile, pressure-band count, palette, and time to author plume and thrust layers. Exports color, heat, and coverage. |
+| `proc.vortex` | Draw rotating, shaded contours along a tapered vortex with editable radius knots, lean, tilt, twist, and breakup. Exports composited RGBA, near and far layers, and the projected paths. |
+
+For `mpm`, define materials as `{ type: 'fluid' | 'elastic', color, density,
+stiffness, shear }`. A body takes `{ rect, material, spacing, velocity,
+release }` or uses an explicit `points` array in place of the rectangle.
+Pixel spacing determines each point's mass and volume. The solver returns
+the raster density and per-point position, velocity and body index. Set
+`cell`, `substeps` and `maxSpeed` to fit the fixed clock. Increasing speed or
+stiffness can require a smaller step. A `release` time holds the body's
+initial pose before letting its points join the shared grid.
+See [Material-point passes and impacts](material-point-impacts.md) for
+coverage, mass, compression, contact, timed impulses and moving obstacles.
 
 ## 3D scenes, signed fields and sprite rigs
 

@@ -1,14 +1,24 @@
 /* Resolve authored soundtrack assets and collect voices before rendering WAV stems. */
 const fs = require('node:fs');
 const path = require('node:path');
+const {createHash} = require('node:crypto');
+const Binaural = require('../src/binaural-profile.js');
+const Radiation = require('../src/spatial-radiation.js');
+const ContactPulse = require('../src/contact-pulse.js');
 const WAV = require('./wav.js');
+const { readAudioSource, isSoundRecipe, decodeSoundRecipe } = require('./sound-source.js');
 const { mix } = require('./scene-audio-mix.js');
+const Ambisonics = require('./scene-ambisonics.js');
+const { planWorldVoices } = require('./scene-voice-budget.js');
+const { createSceneCrowd } = require('./scene-crowd-audio.js');
+const { createPlaybackReceipts } = require('./scene-audio-receipts.js');
 const { createScenePost, buses, legacy } = require('./scene-audio-post.js');
 const { readEditorialProject } = require('./music-editorial.js');
 const { readGraphProject } = require('./graph-project.js');
 const { readAudioPrint } = require('./audio-print.js');
 const { embed } = require('./data-inputs.js');
 const Assets = require('./asset-references.js');
+const SoundPacks = require('./world-sound-pack.js');
 
 const format = 'ink-studio/scene-audio';
 const record = value => value && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -17,7 +27,7 @@ const finite = (n, min, max) => Number.isFinite(n) && n >= min && n <= max;
 const token = value => typeof value === 'string' && value.trim() && value.length <= 512;
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 
-function createSceneAudio(definition, { kit = require('../index.js').load(), resolveAsset, runtime } = {}) {
+function createSceneAudio(definition, { kit = require('../index.js').load(), resolveAsset, runtime, worldSoundPacks = [] } = {}) {
   if (!fields(definition, ['format', 'version', 'sampleRate', 'gain', 'tracks', 'spatial', 'listener', 'music', 'proceduralScore', 'post']) ||
       definition.format !== format || definition.version !== 1 || typeof resolveAsset !== 'function')
     throw new TypeError('Expected a version 1 scene soundtrack and audio resolver');
@@ -33,6 +43,9 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
   const occurrenceOf = event => K.world.timedEvents.timeOf(event) ??
     (['music-transition','music-cue'].includes(event.kind) ? event.time : undefined);
   const mixer = spatial === undefined ? null : K.world.spatialAudio.create(spatial);
+  const priorities=mixer?.jointPriority ? K.jointPriority.forSamples(mixer.jointPriority,sampleRate,T) : undefined;
+  const binauralProfile=mixer?.binauralProfile;
+  const binauralPlan=binauralProfile&&Binaural.prepare(binauralProfile,sampleRate);
   const clock = K.timeDomains.take({ sampleRate });
   const bed = Array.from(tracks, row => {
     if (!fields(row, ['asset','time','duration','offset','rate','gain','loop','bus']) || !token(row.asset) ||
@@ -81,8 +94,9 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
   const inline = proceduralScore?.score === undefined ? null : K.music.score.compile(proceduralScore.score);
   const scoreSystem = proceduralScore?.system, synthAsset = Symbol('procedural score'), productionAsset=Symbol('music production');
 
-  function render(sequence, { timeline, runtime: sceneRuntime, recordedThrough, trace = false } = {}, selection, delivery=false) {
+  function render(sequence, { timeline, runtime: sceneRuntime, recordedThrough, trace = false, soundReceipts, audition, ambisonic = false } = {}, selection, delivery=false) {
     const start = sampleOf(sequence.startPoint), end = sampleOf(sequence.endPoint);
+    const emitField = ambisonic && !selection && !delivery;
     const postSelected=post && (!selection || selection.kind==='stem' && !legacy.includes(selection.name));
     const mixStart=postSelected ? 0 : start;
     const musicSelected = postSelected || !selection || selection.kind==='stem' && ['mix','music'].includes(selection.name);
@@ -92,12 +106,22 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
     if (scoreSystem && run?.view().world.systems[scoreSystem]?.kind !== 'procedural-score')
       throw new Error('Procedural score export needs the named procedural-score system');
     timeline ??= run?.timeline;
+    const playback = mixer?.createPlayback();
     const voices = bed.map(voice => ({ ...voice }));
     const cues = timeline?.audioSchedule(clock) ?? [];
-    const looping = new Map(), resolved = new Map(), positional = [], following = [];
+    const looping = new Map(), contactTracks = new Map(), resolved = new Map(), pulseAssets = new Map(), positional = [], following = [];
     const history = trace && { sections: [], cues: [], layers: [] };
+    const includeRoom=postSelected || selection?.kind!=='stem' || ['mix','spatial'].includes(selection.name);
+    const binaural=binauralPlan&&{...binauralPlan,path:[]};
+    const aggregation=mixer?.voiceBudget?.aggregation;
+    const earPath=binaural?.path??(aggregation||history&&mixer?[]:undefined);
+    const crowd=aggregation&&createSceneCrowd(aggregation,sampleRate,earPath);
+    const roomPath=includeRoom && mixer?.roomResponse ? [] : undefined;
+    const roomResponse=roomPath && {...mixer.roomResponse,path:roomPath,
+      convolution:K.procedural.mediaGraph.prepareImpulseResponse};
+    const playbackReceipts = history && createPlaybackReceipts({sampleRate,start,end,post,earPath});
     let next = 0, score = [], automated = [], knots = 0, generated, produced, entry, worldReport;
-    const productionIntents=[], worldEvents=[];
+    const productionIntents=[], worldEvents=[], productionSources=new Map();
     const cueLimit=musicSelected && captureWorld ?
       Math.max(end,Math.ceil((production.timeline.end+captureWorld.lookAhead)*sampleRate)) : end;
     function resolve(name) {
@@ -110,6 +134,15 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
       }
       return resolved.get(name);
     }
+    function pulseAsset(pulse) {
+      const key=ContactPulse.key(pulse);
+      if(!pulseAssets.has(key)){
+        const id=Symbol('stick-slip');
+        resolved.set(id,ContactPulse.render(pulse,sampleRate));
+        pulseAssets.set(key,id);
+      }
+      return pulseAssets.get(key);
+    }
     function push(row) {
       if (voices.length >= 16384) throw new RangeError('Scene soundtrack exceeds its voice budget');
       voices.push(row);
@@ -120,7 +153,19 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
       const right = ear && V.norm(V.cross(ear.forward, ear.up));
       const at = voice.apparentSource ?? voice.position;
       const pan = right && at ? Math.max(-1, Math.min(1, V.dot(V.norm(V.sub(at, ear.position)), right))) : undefined;
-      return { sample, gain: voice.gain, pan, cutoff: voice.cutoff, delay: delayed ? 0 : voice.delay };
+      const moving=voice.propagation?.arrival!==undefined;
+      return { sample, gain: voice.gain, pan, cutoff: voice.cutoff, delay: delayed||moving ? 0 : voice.delay,
+        ...(moving&&{sourceTime:voice.offset,rate:voice.rate,propagated:true}),
+        ...(binaural&&at&&{hrirAt:at}),
+        ...(emitField&&ear&&at&&{fieldDirection:Ambisonics.direction(ear.position,at)}),
+        ...(voice.radiation&&{radiation:Radiation.shelf(voice.bands,voice.gain)}),
+        ...(mixer?.voiceBudget&&{rankGain:Math.max(voice.gain,voice.contact?.targetGain??0)}),
+        ...(voice.processing&&{processing:voice.processing}) };
+    }
+    function receiptPoint(knot,voice) {
+      knot.position = voice.position;
+      knot.apparentSource = voice.apparentSource ?? voice.position;
+      knot.opening = voice.acousticOpening ?? null;
     }
     function append(target, row) {
       if (++knots > 200000) throw new RangeError('Scene soundtrack exceeds its spatial automation budget');
@@ -143,7 +188,7 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
         ...(duration!==undefined && {duration})});
     }
     function beat(event) {
-      if (!event || !history) return;
+      if (!event || (!history && !soundReceipts && !audition)) return;
       const {world,eventStream} = run.view(), W = K.world;
       const { id, tick, system, kind, branch, causes } = W.committedEvents.read(event,world.id,eventStream);
       const occurrence = occurrenceOf(event);
@@ -151,20 +196,68 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
       const source = { world:world.id, branch, id, tick, system, kind, timecode:T.pack(original) };
       return { ...source, beatId:W.inspectionLinks.identify(source), causes };
     }
-    function shot(voice, ear, sample, stem, source) {
-      const time = sample + Math.round(voice.delay * sampleRate);
+    function budgetTag(voice,mode=voice.mode){
+      if(!mixer?.voiceBudget)return {};
+      const {priority,protected:critical,group,id,cue}=voice;
+      return {budget:{id:id??'spatial:'+voices.length,mode,cue,priority,protected:critical,group}};
+    }
+    function shot(voice, ear, sample, stem, source, observedSample=sample) {
+      const layerDelay = Math.round((voice.startDelay ?? 0) * sampleRate);
+      const time = sample + layerDelay + Math.round(voice.delay * sampleRate);
+      const evidence=source && {cue:voice.cue,asset:voice.asset,stem,bus:voice.bus,
+        requestedSample:sample,plannedSample:time,observedSample,voice};
       let report;
+      if (history && source && voice.selection?.variation && sample < end) {
+        const choices = history.soundChoices ??= [];
+        if (choices.length>=16384) throw new RangeError('Story audio exceeds its sound choice receipt budget');
+        const {binding,rule,family,take,layer,variation} = voice.selection;
+        choices.push({beatId:source.beatId,binding,rule,family,take,
+          ...(layer && {layer:layer.at}),cue:voice.cue,asset:voice.asset,...variation});
+      }
       if (history && source && time < end) {
         report = { source, cue:voice.cue, asset:voice.asset, stem, bus:voice.bus ?? (stem==='music' ? 'music' : 'effects'),
-          onsetSample:sample, arrivalSample:time, status:voice.status, position:voice.position, gain:voice.gain };
+          onsetSample:sample, arrivalSample:time, status:voice.status, position:voice.position, gain:voice.gain,
+          ...(voice.selection && { selection:voice.selection }),
+          ...(voice.processing&&(voice.processing.profiles.length||voice.audition)&&{processing:voice.processing}),
+          ...(voice.sound && { sound:voice.sound }),
+          ...(voice.radiation && { radiation:voice.radiation,bands:voice.bands }),
+          ...(voice.propagation && { propagation:voice.propagation }),
+          ...(voice.reflections && { reflections:voice.reflections.map(tap=>({...tap,
+            arrivalSample:time+Math.round(tap.delay*sampleRate)})) }),
+          ...(voice.audition && { audition:voice.audition }),
+          ...(voice.impact && { impact:{...voice.impact, delay:voice.startDelay, startSample:sample+layerDelay} }) };
         if (history.cues.length >= 16384) throw new RangeError('Story audio trace exceeds its cue budget');
         history.cues.push(report);
       }
-      if (voice.gain<=0 && !voice.attachment) return;
-      const row={stem,bus:voice.bus,asset:voice.asset,cue:voice.cue,first:time,offset:voice.offset,rate:voice.rate};
+      if (voice.gain<=0 && !voice.attachment) {
+        if (evidence) playbackReceipts.add(source,{...evidence,audit:report,
+          reason:['out-of-range','unavailable','blocked'].includes(voice.status) ? voice.status : 'zero-gain'});
+        return;
+      }
+      const row={stem,bus:voice.bus,asset:voice.stickSlip?pulseAsset(voice.stickSlip):voice.asset,
+        cue:voice.cue,first:time,offset:voice.offset,rate:voice.rate,
+        ...(crowd&&{aggregationAt:voice.apparentSource??voice.position,aggregationDelay:voice.delay+(voice.startDelay??0)})};
+      if (voice.stickSlip) {
+        row.stickSlip={...voice.stickSlip,onsetSample:sample};
+        row.end=time+Math.ceil(resolve(row.asset).samples.length/row.rate);
+      }
+      if (voice.sound && time<cueLimit) {
+        const audio = resolve(voice.asset);
+        const natural = Math.max(0, (audio.samples.length/audio.channels/audio.sampleRate-voice.offset)/voice.rate);
+        row.end = time + Math.min(Math.ceil(natural*sampleRate),Math.round(voice.duration*sampleRate));
+        if (report) report.endSample = row.end;
+      }
       if (stem!=='music') capture(voice.cue,row,voice.gain);
-      if (time>=end) return;
+      if (time>=end) {
+        if (evidence) playbackReceipts.add(source,evidence);
+        return;
+      }
       const p = point(voice,ear,time,true);
+      if(voice.reflections?.length)row.reflections=voice.reflections.map(tap=>{
+        const lag=Math.round(tap.delay*sampleRate);
+        return {lag,point:point({...tap,processing:voice.processing},ear,time+lag,true)};
+      });
+      if (evidence) receiptPoint(p,voice);
       if (voice.attachment) {
         const audio = resolve(voice.asset);
         const duration = Math.max(0, (audio.samples.length/audio.channels/audio.sampleRate-voice.offset)/voice.rate);
@@ -172,12 +265,14 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
         following.push({ row, attachment:voice.attachment, report });
         if (report) report.attachment = voice.attachment.at;
       }
-      push(Object.assign(row,{points:[p]}));
+      push(Object.assign(row,{points:[p]},budgetTag(voice),mixer?.voiceBudget&&report&&{audit:report}));
+      if (evidence) playbackReceipts.add(source,{...evidence,track:row,audit:report});
     }
-    function cueFrame(query, sample, nextSample, ear) {
+    function cueFrame(query, time, sample, nextSample, ear) {
       while (next < cues.length && cues[next].firstSample < nextSample && cues[next].firstSample < cueLimit) {
         const row = cues[next++], { cue, firstSample: first, endSample } = row;
-        const configured = mixer?.cue({ query, listener, cue, gain: row.gain, pitch: row.rate });
+        const configured = mixer?.cue({ query, listener, cue, gain: row.gain, pitch: row.rate,
+          time,playback,onset:first/sampleRate,...(endSample!==undefined&&{mode:'clip'}) });
         if (!configured) {
           const voice={stem:'timeline',asset:cue,first,end:endSample,offset:row.offset,gain:row.gain,rate:row.rate};
           capture(cue,voice,row.gain);
@@ -187,7 +282,8 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
         } else {
           const delay = Math.round(configured.delay * sampleRate);
           const voice={stem:'timeline',bus:configured.bus,asset:configured.asset,first:first+delay,end:endSample+delay,
-            offset:row.offset,rate:configured.rate,points:[]};
+            offset:row.offset,rate:configured.rate,points:[],
+            ...(mixer?.voiceBudget&&{cue:configured.cue,...budgetTag(configured,'clip')})};
           capture(cue,voice,configured.gain);
           if (voice.first<end) {
             push(voice);
@@ -198,7 +294,7 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
       for (let i = positional.length - 1; i >= 0; i--) {
         const { voice, ...parameters } = positional[i];
         if (sample >= voice.end) positional.splice(i, 1);
-        else append(voice.points, point(mixer.cue({ query, listener, ...parameters }), ear,
+        else append(voice.points, point(mixer.cue({ query, listener, ...parameters,mode:'clip' }), ear,
           Math.max(sample, voice.first), true));
       }
     }
@@ -247,41 +343,95 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
         if (sample<=row.first) continue;
         const live = mixer.cue({query,listener,...attachment});
         const knot = point(live,ear,sample,true);
+        if (report) receiptPoint(knot,live);
         knot.pan ??= row.points.at(-1).pan;
+        if (binaural) knot.hrirAt ??= row.points.at(-1).hrirAt;
+        if (emitField) knot.fieldDirection ??= row.points.at(-1).fieldDirection;
         append(row.points,knot);
         if (report) {
           report.lastPosition = live.position;
           report.lastStatus = live.status;
+          if(live.processing)report.lastProcessing=live.processing;
+          if(live.radiation)report.lastRadiation=live.radiation;
         }
       }
     }
+    function contactPoint(voice, ear, at, ended = false) {
+      let track = contactTracks.get(voice.id);
+      if (!track) {
+        const {id,interaction,material} = voice.contact;
+        track = push({stem:'spatial', bus:voice.bus ?? 'foley', asset:voice.asset, cue:voice.cue, first:at,
+          loop:true, points:[], contact:{id,interaction,material,voice:voice.id},...budgetTag(voice)});
+        contactTracks.set(voice.id, track);
+      }
+      append(track.points, {...point(voice, ear, at), sourceTime:voice.offset, rate:voice.rate});
+      if (ended) {
+        track.end = at;
+        contactTracks.delete(voice.id);
+      }
+    }
     function observe(time, sample, nextSample, query, events = []) {
-      const state = mixer?.frame({ query, listener, time, events, captureSources:trace });
+      const receipts = soundReceipts && new Map(events.flatMap(event=>{
+        const saved = soundReceipts.get(beat(event)?.beatId);
+        return saved ? [[event.id,saved]] : [];
+      }));
+      const target = audition && events.find(event=>event.id===audition.event && beat(event)?.beatId===audition.beatId);
+      const state = mixer?.frame({query,listener,time,events,captureSources:trace,playback,receipts,
+        ...(target && {audition})});
+      if (earPath && sample<end) {
+        const ear=state.listener, prior=earPath.at(-1);
+        const same=ear===prior?.ear||ear&&prior?.ear&&['position','forward','up'].every(key=>
+          ear[key].every((n,i)=>n===prior.ear[key][i]));
+        if (!prior || !same) append(earPath,{sample,ear:ear&&{...ear,right:K.V.norm(K.V.cross(ear.forward,ear.up))}});
+      }
+      if (roomPath && sample<end) {
+        const {room,doorway,sends}=state.roomResponse;
+        const previous=roomPath.at(-1);
+        if (!previous || previous.room!==room || previous.doorway!==doorway ||
+            sends.length!==previous.sends.length || sends.some(({asset,gain},i)=>
+              asset!==previous.sends[i].asset || Math.abs(gain-previous.sends[i].gain)>1e-9))
+          append(roomPath,{sample,room,doorway,sends});
+      }
       const byId = history && state?.cues.length ? new Map(events.map(event=>[event.id,event])) : null;
-      cueFrame(query, sample, nextSample, state?.listener);
+      cueFrame(query, time, sample, nextSample, state?.listener);
       if (state) {
         updateFollowing(query,state.listener,sample);
+        for (const change of state.contactChanges ?? []) {
+          contactPoint(change.voice, state.listener, change.time === time ? sample : stamp(change.time), change.ended);
+        }
         for (const voice of state.active) {
+          if (voice.contact) {
+            contactPoint(voice, state.listener, sample);
+            continue;
+          }
           let track = looping.get(voice.id);
           if (!track) {
             track = push({ stem:'spatial', bus:voice.bus, asset:voice.asset,
               ...(voice.id.startsWith('emitter:') && {emitter:voice.id.slice('emitter:'.length)}),
               first:sample, end:Number.MAX_SAFE_INTEGER,
-              loop:true, offset:voice.offset, rate:voice.rate, points:[] });
+              loop:true, offset:voice.offset, rate:voice.rate, points:[],...budgetTag(voice) });
             looping.set(voice.id, track);
           }
-          append(track.points, point(voice, state.listener, sample));
+          const knot=point(voice,state.listener,sample);
+          if(knot.propagated&&!track.propagated){
+            track.first=Math.max(track.first,Math.round(voice.propagation.arrival*sampleRate));
+            track.propagated=true;
+          }
+          append(track.points,knot);
         }
       }
       for (const voice of state?.cues ?? [])
         shot(voice,state.listener,voice.onset===undefined ? sample : stamp(voice.onset),'spatial',
-          beat(byId?.get(voice.sourceEvent)));
+          beat(byId?.get(voice.sourceEvent)),sample);
       for (const event of events) if (musicSelected && music && event.system === music.system) {
         const onset = K.world.timedEvents.timeOf(event) ?? event.time ?? time;
         const at = onset === time ? sample : stamp(onset);
         if (production && (event.kind==='music-transition' || event.kind==='music-cue')) {
           if (onset<production.timeline.end) {
-            productionIntents.push({...event,time:onset});
+            const intent={...event,time:onset};
+            productionIntents.push(intent);
+            if (history && event.kind==='music-cue')
+              productionSources.set(intent,{source:beat(event),observedSample:sample});
             if (history && event.kind==='music-transition' && at<end)
               history.sections.push({section:event.to,resource:event.resource,sample:at,source:beat(event)});
           }
@@ -289,12 +439,18 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
         }
         if (event.kind === 'music-transition') section(event, at, beat(event));
         if (event.kind === 'music-cue') {
-          const addressed = mixer?.cue({ query, listener, cue:event.resource, at:event.emitter, gain:music.gain });
-          if (addressed) shot(addressed,state?.listener,at,'music',beat(event));
+          const addressed = mixer?.cue({ query, listener, cue:event.resource, at:event.emitter, gain:music.gain,
+            time,playback,onset,captureSource:Boolean(history) });
+          if (addressed) shot(addressed,state?.listener,at,'music',history && beat(event),sample);
           else {
-            push({stem:'music',asset:event.resource,first:at,gain:music.gain});
-            if (history && at<end) history.cues.push({source:beat(event),cue:event.cue,asset:event.resource,stem:'music',bus:'music',
-              onsetSample:at,arrivalSample:at,status:'unpositioned',position:null,gain:music.gain ?? 1});
+            const track=push({stem:'music',asset:event.resource,first:at,gain:music.gain});
+            if (history && at<end) {
+              const report={source:beat(event),cue:event.cue,asset:event.resource,stem:'music',bus:'music',
+                onsetSample:at,arrivalSample:at,status:'unpositioned',position:null,gain:music.gain ?? 1};
+              history.cues.push(report);
+              playbackReceipts.add(report.source,{cue:report.cue,asset:report.asset,stem:'music',
+                requestedSample:at,plannedSample:at,observedSample:sample,track,audit:report});
+            }
           }
         }
       }
@@ -354,28 +510,75 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
           Object.hasOwn(sources[initial.source]?.tracks ?? {},name)));
         const liveTimeline={...timeline,segments:{...timeline.segments,
           [timeline.entry]:{...initial,layers:{...initial.layers,...liveLayers}}}};
+        productionIntents.sort((a,b)=>a.time-b.time || (a.serial ?? 0)-(b.serial ?? 0));
         const result=K.music.production.renderTimeline(sources,liveTimeline,productionIntents,sourcesByName,
           {sampleRate,start:{numerator:mixStart,denominator:sampleRate},end:{numerator:stop,denominator:sampleRate},
             ...(captureWorld && {world:{...production.world,events:worldEvents}})});
         produced=result.value;
         worldReport=result.report.world;
         push({stem:'music',asset:productionAsset,first:mixStart,end:stop,gain:music.gain});
+        if (history) for (const decision of result.report.cueDecisions) {
+          const origin=productionSources.get(productionIntents[decision.eventIndex]);
+          if (!origin) continue;
+          const {source,observedSample}=origin, {cue,resource,segment,status}=decision, at=stamp(decision.time);
+          if (at>=end) continue;
+          const asset=segment ? liveTimeline.segments[segment].source : resource;
+          const report={source,cue,asset,stem:'music',bus:'music',onsetSample:at,arrivalSample:at,
+            status,position:null,gain:music.gain ?? 1};
+          history.cues.push(report);
+          playbackReceipts.add(source,{cue,asset,stem:'music',requestedSample:at,plannedSample:at,observedSample,
+            audit:report,placed:status==='played' && at<stop && music.gain!==0,
+            reason:status!=='played' ? status : music.gain===0 ? 'zero-gain' :
+              at>=stop ? 'outside-production-window' : undefined});
+        }
       }
+    }
+    const handoff = emitField && Ambisonics.render(voices,resolve,{
+      start,end,sampleRate,gain,parametric:K.procedural.audioParametric,roomResponse
+    });
+    const allocation=mixer?.voiceBudget&&planWorldVoices(voices,resolve,{end,sampleRate,policy:mixer.voiceBudget,crowd,priorities});
+    if (crowd&&(selection?.kind!=='world'||selection.name==='procedural/voice-aggregation')){
+      const texture=crowd.tracks(audio=>{
+        const id=Symbol('voice aggregation');
+        resolved.set(id,audio);
+        return id;
+      });
+      voices.push(...texture);
     }
     const active=voices.filter(row => row.first < end && (postSelected || !selection ||
       (selection.kind==='stem' ? selection.name==='mix' || row.stem===selection.name :
         row.stem==='spatial' && row[selection.by]===selection.name)));
-    if (delivery) return post.prepare(active,resolve,{start,end,gain},true);
-    const result=postSelected ? post.render(active,resolve,{start,end,gain},selection) :
-      mix(active,resolve,{start,end,sampleRate,gain,capture:selection!==undefined});
-    if (selection?.kind==='world' && !result.report.stems.spatial.voices)
+    if (delivery) return post.prepare(active,resolve,{start,end,gain,roomResponse,binaural},true);
+    const result=postSelected ? post.render(active,resolve,{start,end,gain,roomResponse,binaural},selection) :
+      mix(active,resolve,{start,end,sampleRate,gain,capture:selection!==undefined,parametric:K.procedural.audioParametric,roomResponse,binaural});
+    if (selection?.kind==='world' && !result.report.stems.spatial.voices && !result.report.stems.spatial.roomResponse?.assets)
       throw new RangeError('No audible world source in the selected capture range');
+    if (handoff) {
+      Object.assign(result.waves,handoff.waves);
+      result.report.ambisonic=handoff.manifest;
+    }
+    if (binauralProfile) result.report.binauralProfile=Binaural.describe(binauralProfile);
     if (worldReport) result.report.worldScore=worldReport;
-    if (history) result.report.storyAudio=history;
+    if (worldSoundPacks.length) result.report.worldSoundPacks=worldSoundPacks;
+    if (allocation) result.report.voiceBudget=allocation;
+    if (history) {
+      const contacts = active.filter(row=>row.contact && Math.max(row.first,start)<Math.min(row.end??end,end))
+        .map(row=>({...row.contact,cue:row.cue,asset:row.asset,bus:row.bus,stem:row.stem,
+          fromSample:Math.max(row.first,start),toSample:Math.min(row.end??end,end)}));
+      if (contacts.length) history.contacts=contacts;
+      const pulses=active.filter(row=>row.stickSlip&&row.end>start).map(row=>({
+        ...row.stickSlip,arrivalSample:row.first,endSample:row.end,bus:row.bus,gain:row.points[0].gain}));
+      if (pulses.length) history.stickSlip=pulses;
+      if (roomPath) history.roomResponse={...mixer.roomResponse,path:roomPath};
+      history.playbackReceipts=playbackReceipts.finish(resolve,gain);
+      result.report.storyAudio=history;
+    }
     return result;
   }
   return Object.freeze({
     sampleRate,
+    ...(binauralProfile&&{binauralProfile}),
+    soundFamilies:Object.freeze(Object.keys(spatial?.soundFamilies??{}).sort()),
     asset(name) {
       const audio = resolveAsset(name);
       if (!audio) throw new RangeError('Missing soundtrack asset ' + name);
@@ -397,15 +600,50 @@ function createSceneAudio(definition, { kit = require('../index.js').load(), res
   });
 }
 
-function readSceneAudio(file, { kit = require('../index.js').load(), onFile = () => {}, recordedOnly = false, additions, ...graphOptions } = {}) {
-  const source = path.resolve(file), folder = path.dirname(source);
-  const { assets = undefined, world, assetRegistry, ...definition } = read(source);
+function readSceneAudio(file, { kit = require('../index.js').load(), onFile = () => {}, recordedOnly = false,
+  additions, maxPlanBytes, jointPriority, ...graphOptions } = {}) {
+  const source = path.resolve(file), folder = path.dirname(source), K=kit.KIT;
+  const packAPI=K.world.soundPacks, stat=fs.statSync(source);
+  if(!stat.isFile()||stat.size>packAPI.maxDocumentBytes)throw new RangeError('Scene soundtrack exceeds its byte budget');
+  const bytes=fs.readFileSync(source), document=JSON.parse(bytes.toString('utf8'));
   onFile(source);
+  if(document?.format===packAPI.format) {
+    if(additions)throw new TypeError('Use a scene soundtrack with a worldSoundPacks import to add editorial tracks');
+    if(jointPriority && jointPriority!==false)
+      throw new TypeError('Import the world sound pack into a scene soundtrack to apply joint priorities');
+    return SoundPacks.createSoundtrack(SoundPacks.open(bytes,K,undefined,document),kit);
+  }
+  if(maxPlanBytes!==undefined&&bytes.length>maxPlanBytes)throw new RangeError('Story audio plan exceeds its byte budget');
+  const { assets = undefined, world, assetRegistry, worldSoundPacks = [], ...definition } = document;
+  const packs=SoundPacks.mount(source,worldSoundPacks,K,{onFile}), packsById=new Map(packs.map(pack=>[pack.manifest.id,pack]));
   if (recordedOnly && world!==undefined) throw new TypeError('The recorded run supplies the story soundtrack world');
   const api = kit.KIT.authoring.assetReferences, select = Assets.scope(api, source, assetRegistry, {onFile});
-  const assetsByName = assets === undefined && (additions || definition.proceduralScore!==undefined || definition.music?.production) ? {} : assets;
+  const assetsByName = assets === undefined && (packs.length || additions || definition.proceduralScore!==undefined || definition.music?.production) ? {} : assets;
   if (!record(assetsByName) || Object.keys(assetsByName).length > 1024 || !Object.keys(assetsByName).every(token))
     throw new TypeError('Soundtrack needs named audio assets');
+  const imported=packs.length ? packAPI.compose(definition.spatial,packs,Object.keys(assetsByName)) : null;
+  if(imported)definition.spatial=imported.spatial;
+  let priority=jointPriority ?? definition.spatial?.jointPriority;
+  if(typeof priority==='string'){
+    const filename=path.resolve(folder,priority);
+    onFile(filename);
+    priority=read(filename);
+  }
+  if(priority && !definition.spatial)throw new TypeError('Joint priorities need a spatial soundtrack');
+  if(priority!==undefined && definition.spatial)definition.spatial={...definition.spatial,jointPriority:priority};
+  const pin=definition.spatial?.binauralProfile;
+  if (record(pin)&&Object.hasOwn(pin,'file')) {
+    if (!fields(pin,['file','sha256'])||!token(pin.file)||!Binaural.hash(pin.sha256))
+      throw new TypeError('Binaural profile reference needs a file and lowercase SHA-256');
+    const file=path.resolve(folder,pin.file), stat=fs.statSync(file);
+    if (!stat.isFile()||!stat.size||stat.size>Binaural.maxBytes)
+      throw new RangeError('Binaural profile exceeds its byte budget');
+    const bytes=fs.readFileSync(file);
+    if (createHash('sha256').update(bytes).digest('hex')!==pin.sha256) throw new Error('Binaural profile SHA-256 mismatch');
+    onFile(file);
+    definition.spatial={...definition.spatial,binauralProfile:Binaural.decode(bytes,pin.sha256)};
+  }
+  const roomImpulses = new Map();
   const assetCache = new Map(), graphs = new Map(), prints=new Map(), editorials=new Map();
   const T=kit.KIT.procedural.takeTime;
   let soundWorld, totalSamples = 0;
@@ -451,18 +689,29 @@ function readSceneAudio(file, { kit = require('../index.js').load(), onFile = ()
   }
   function resolveAsset(name) {
     if (additions?.assets.has(name)) {
-      if (Object.hasOwn(assetsByName,name)) throw new TypeError('Soundtrack asset name collides with a handoff asset: '+name);
+      if (Object.hasOwn(assetsByName,name)||imported?.assets.has(name))
+        throw new TypeError('Soundtrack asset name collides with a handoff asset: '+name);
       return additions.assets.get(name);
     }
     if (assetCache.has(name)) return assetCache.get(name);
     const spec = Object.hasOwn(assetsByName, name) ? assetsByName[name] : undefined;
+    const pack=imported?.assets.get(name);
     let audio;
-    if (typeof spec === 'string') {
+    if(pack)audio=packsById.get(pack.pack).audio(name);
+    else if (fields(spec,['roomImpulse','layer']) && token(spec.roomImpulse) && ['early','tail'].includes(spec.layer)) {
+      const file=path.resolve(folder,spec.roomImpulse);
+      if(!roomImpulses.has(file))roomImpulses.set(file,require('./room-impulse-capture.js').load(file,onFile));
+      audio=roomImpulses.get(file)[spec.layer];
+    }
+    else if (typeof spec === 'string') {
       const file = path.resolve(folder,spec);
-      audio = WAV.read(file);
+      audio = readAudioSource(file, kit.KIT.procedural);
       onFile(file);
     }
-    else if (api.isRef(spec)) audio = WAV.decode(select(spec, Assets.waveKinds).bytes);
+    else if (api.isRef(spec)) {
+      const { bytes, filename } = select(spec, Assets.waveKinds);
+      audio = isSoundRecipe(filename) ? decodeSoundRecipe(bytes, kit.KIT.procedural).value : WAV.decode(bytes);
+    }
     else if (record(spec) && Object.hasOwn(spec,'print')) {
       const print = printAsset(spec), entry = print.entry(spec.take);
       audio = print.load(spec.take).value;
@@ -503,7 +752,7 @@ function readSceneAudio(file, { kit = require('../index.js').load(), onFile = ()
     tracks=[...(tracks??[]),...additions.tracks];
     definition.post ??= {};
   }
-  return createSceneAudio({...definition,...(tracks!==undefined && {tracks})}, { kit, resolveAsset,
+  return createSceneAudio({...definition,...(tracks!==undefined && {tracks})}, { kit, resolveAsset, worldSoundPacks:packs.map(pack=>pack.identity),
     ...(soundWorld && { runtime: () => kit.KIT.world.runtime.create(soundWorld) }) });
 }
 

@@ -1,5 +1,7 @@
 # Music production
 
+[Dance drop studies](music-drop-studies.md) ships editable drum & bass, dubstep and rave sessions with in-context drum auditions and measured kick–bass timing.
+
 Use a phrase arrangement as the shared score and scene cue source. A production
 adds instrument patches, performed note timing, voicing, mixing, and playback
 rules. The [Relay Glass cue](../examples/music-production/relay-glass.json)
@@ -145,6 +147,9 @@ the player's route and prior listening.
 
 [Rehearse adaptive joins](music-adaptive-rehearsal.md) against recorded world
 paths and audition edits at the same sample addresses.
+
+[Run the score live](music-live-adaptive.md) with causal exits, persistent DSP,
+streamed cues, and a sample-addressed explanation of each join.
 
 Pass the `music-transition` and `music-cue` intents from Ink's
 [adaptive music clock](adaptive-music.md) to `music.renderTransitions`.

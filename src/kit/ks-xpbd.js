@@ -390,6 +390,40 @@
     }
   };
 
+  K.xpbd.contactField = (sdf, { friction, tolerance, fallback }) => {
+    const V=K.V;
+    function distance(p, time) {
+      const d = sdf(...p, time);
+      if (!Number.isFinite(d) && d !== Infinity) throw new RangeError('Contact field must return a signed distance');
+      return d;
+    }
+    function hit(p, time, radius) {
+      const d = distance(p, time);
+      if (d > radius + tolerance) return null;
+      const gradient = p.map((_, axis) => {
+        const a = p.slice(), b = p.slice();
+        const e = Math.max(.0001, radius * .01);
+        a[axis] += e;
+        b[axis] -= e;
+        return distance(a, time) - distance(b, time);
+      });
+      const length = V.len(gradient);
+      // A point at the center of a solid has no unique outward normal.
+      const normal = length > 1e-8 && Number.isFinite(length) ? V.mul(gradient, 1 / length) : fallback.slice();
+      return { distance: d, normal, point: V.mad(p, normal, -d) };
+    }
+    function project(_, p, previous, clearance, time) {
+      const contact = hit(p, time, clearance);
+      if (!contact || contact.distance >= clearance) return null;
+      const { normal, distance: d } = contact;
+      const push = V.mad(p, normal, clearance - d);
+      const movement = V.sub(p, previous);
+      const tangent = V.mad(movement, normal, -V.dot(movement, normal));
+      return V.mad(push, tangent, -friction);
+    }
+    return { hit, project };
+  };
+
   K.xpbd.clothGrid = ({nu,nv,at,u,v,stretch=1e-6,shear=1e-5,bend=2e-3,tear=0}) => {
     const points=[], links=[], faces=[], horizontal=[], vertical=[];
     const link=(a,b,compliance,ratio,kind)=>links.push({a,b,compliance,ratio,kind})-1;
@@ -588,7 +622,8 @@
           const a = position(k), b = position(k + 1), c = position(k + nu), d = position(k + nu + 1);
           const top = K.V.lerp(a, b, fu), bottom = K.V.lerp(c, d, fu);
           const du = K.V.lerp(K.V.sub(b, a), K.V.sub(d, c), fv), dv = K.V.sub(bottom, top);
-          return { p: K.V.lerp(top, bottom, fv), n: K.V.norm(cross(du, dv), norm(cross(U, Vv))) };
+          return { p: K.V.lerp(top, bottom, fv), n: K.V.norm(cross(du, dv), norm(cross(U, Vv))),
+            tangent:du,bitangent:dv };
         },
         ...(torn && { intact(uv) {
           const [i, j] = cell(uv), k = j * nu + i;
@@ -615,6 +650,12 @@
       bindStroke(source, appearance) {
         const stroke = { ...source, kind: 'surface', chart: strokeChart(i => rest[i]) };
         const binding = K.curveSplats.bind(B, stroke, K.curveSplats.drivers.chart(context => context.chart), appearance);
+        strokes.push(binding);
+        return binding;
+      },
+      bindGrowth(growth, appearance) {
+        const chart=strokeChart(i=>rest[i]);
+        const binding=K.curveSplats.grow(B,{kind:'uv',chart:context=>context.chart ?? chart},growth,appearance);
         strokes.push(binding);
         return binding;
       },

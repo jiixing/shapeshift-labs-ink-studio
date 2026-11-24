@@ -1,14 +1,18 @@
+import {setupRecording} from './recording.mjs';
+import {setupSoundBrowser} from './sound-browser.mjs';
+
 const $=id=>document.getElementById(id);
 const option=(value,label=value)=>new Option(label,value);
 const seconds=value=>({seconds:Number(value)});
 const client=crypto.randomUUID();
-let key,state,context,active=false,playing=false,pulling=false,timer,nextAt=0,heard=[],clippedFrames=0;
+let key,state,context,recorder,sounds,shot,playing=false,pulling=false,timer,nextAt=0,heard=[],clippedFrames=0;
 const desks=new Map();
 let scoreNotes,reading=false,notesRevision;
 
 async function post(route,body) {
-  const response=await fetch(route,{method:'POST',headers:{'content-type':'application/json','x-ink-session':key},
-    body:JSON.stringify(body)});
+  const binary=body instanceof Uint8Array;
+  const response=await fetch(route,{method:'POST',headers:{'content-type':binary ? 'application/octet-stream' : 'application/json',
+    'x-ink-session':key},body:binary ? body : JSON.stringify(body)});
   if (!response.ok) throw new Error((await response.json()).error);
   return response;
 }
@@ -78,6 +82,9 @@ function show(next) {
     'No ranges kept';
   selections();
   monitorTargets();
+  if (loopChanged) recorder?.newLoop();
+  recorder?.show();
+  sounds?.show();
 }
 function monitorTargets() {
   const mode=$('monitor-mode').value, target=$('monitor-target'), selected=target.value;
@@ -96,11 +103,11 @@ async function refresh(readNotes=false) {
   }
   if (state && next.revision<state.revision) return;
   if (!state || readNotes || next.revision!==state.revision || next.loop.from!==state.loop.from ||
-    next.loop.to!==state.loop.to || Object.entries(next.lanes).some(([name,lane])=>lane.take!==state.lanes[name]?.take))
+    next.loop.to!==state.loop.to || JSON.stringify(next.sound)!==JSON.stringify(state.sound) || Object.entries(next.lanes).some(([name,lane])=>lane.take!==state.lanes[name]?.take))
     show(next);
 }
 async function pump() {
-  if (!active || !playing || pulling) return;
+  if (!context || !playing || pulling) return;
   pulling=true;
   try {
     if (nextAt-context.currentTime<.067) {
@@ -117,8 +124,11 @@ async function pump() {
       source.buffer=buffer;
       source.connect(context.destination);
       if (nextAt<=context.currentTime) nextAt=context.currentTime+.012;
+      const first=Math.round(nextAt*state.sampleRate);
+      nextAt=first/state.sampleRate;
       source.start(nextAt);
       heard.push({...anchor,at:nextAt,count});
+      recorder?.schedule(anchor,first,count);
       nextAt+=buffer.duration;
       clippedFrames=anchor.clippedFrames;
     }
@@ -145,14 +155,31 @@ function cursor() {
     $('cursor').textContent=(at/state.sampleRate).toFixed(3)+' s   ·   '+lap+(clippedFrames ? '   ·   clipped' : '');
     $('position').value=intro ? 0 : (offset%size)/size;
   }
+  recorder?.tick();
   requestAnimationFrame(cursor);
 }
 
+function getContext(create=true) {
+  if (!context && create) context=new AudioContext({sampleRate:state.sampleRate});
+  if (context && context.sampleRate!==state.sampleRate) throw new Error('Audio device did not open at the session sample rate');
+  return context;
+}
+async function previewSound(args) {
+  const ctx=getContext();
+  await ctx.resume();
+  const response=await post('/sound-preview',args);
+  const buffer=await ctx.decodeAudioData(await response.arrayBuffer());
+  shot?.stop();
+  const source=ctx.createBufferSource();
+  source.buffer=buffer;
+  source.connect(ctx.destination);
+  source.onended=()=>{if (shot===source) shot=undefined;};
+  shot=source;
+  source.start();
+}
+
 $('play').addEventListener('click',act(async()=>{
-  if (!active) {
-    context=new AudioContext({sampleRate:state.sampleRate});
-    active=true;
-  }
+  getContext();
   playing=!playing;
   $('play').textContent=playing ? 'Pause' : 'Play';
   if (playing) {
@@ -160,6 +187,7 @@ $('play').addEventListener('click',act(async()=>{
     pump();
   } else {
     clearTimeout(timer);
+    recorder?.pause();
     await context.suspend();
   }
 }));
@@ -168,6 +196,7 @@ $('loop').addEventListener('submit',act(async()=>{
   show(await command('loop',{from:seconds($('loop-in').value),to:seconds($('loop-out').value),
     ...(lead!=='' && {leadInSamples:Math.round(Number(lead)*state.sampleRate)})}));
   bounds();
+  recorder?.newLoop();
   if (!playing && nextAt<= (context?.currentTime ?? 0)) heard=[];
   status('Loop updated');
 }));
@@ -215,6 +244,7 @@ $('save').addEventListener('click',act(async()=>{
   status('Downloaded the session recipe');
 }));
 window.addEventListener('pagehide',()=>{
+  recorder?.close();
   if (key) fetch('/command',{method:'POST',headers:{'content-type':'application/json','x-ink-session':key},keepalive:true,
     body:JSON.stringify({op:'pause',client})}).catch(()=>{});
 });
@@ -230,6 +260,10 @@ try {
     $('monitor-target').value=state.monitor.lane ?? state.monitor.tap;
   }
   bounds();
+  recorder=setupRecording({state:()=>({...state,recordingPlayback:playing}),inspect:()=>scoreNotes,
+    context:getContext,post,command,refresh,client,status});
+  sounds=setupSoundBrowser({state:()=>state,command,refresh,status,act,preview:previewSound});
+  sounds.show();
   $('play').disabled=false;
   requestAnimationFrame(cursor);
   setInterval(async()=>{

@@ -134,13 +134,15 @@
     function location(id) {
       if (locations.has(id)) return locations.get(id);
       const entity = own(world.entities,id) && world.entities[id];
-      let point = null, socketTurn = null, material, deformation;
+      let point = null, socketTurn = null, material, deformation, velocity, angular;
       if(!own(overlay?.entities,id))for (const system of Object.keys(systems)) {
         const pose = systems[system].pose?.(states[system],id);
         if (pose === false) { locations.set(id,null); return null; }
         if (pose) {
           point = pose.position ?? pose;
           socketTurn = pose.rotation ?? null;
+          if(!pose.fixed&&vector(pose.velocity))velocity=pose.velocity;
+          if(!pose.fixed&&vector(pose.angular))angular=pose.angular;
           if(pose.bend)deformation={bend:pose.bend,half:pose.half};
           if (pose.materialAsset!==undefined) material={materialAsset:pose.materialAsset,materialWetness:pose.materialWetness};
           break;
@@ -157,9 +159,11 @@
           const offset=host.bend&&!entity.anchor?.socket?W.durability.bendPoint(host,point):point;
           point = K.V.add(origin,host.rotation ? K.M.app(host.rotation,offset) : offset);
           socketTurn = host.rotation;
+          angular = host.angular;
+          velocity = velocityAt(host,point);
         }
       }
-      const pose = point ? {point,rotation:socketTurn,entity,material,...deformation} : null;
+      const pose = point ? {point,rotation:socketTurn,entity,material,velocity,angular,...deformation} : null;
       locations.set(id,pose);
       return pose;
     }
@@ -169,10 +173,15 @@
       const offset = W.durability.bendPoint(pose,pose.entity.sockets[name]);
       return K.V.add(pose.point,pose.rotation ? K.M.app(pose.rotation,offset) : offset);
     }
-    function fieldFrame({entity,socket:name}) {
+    function velocityAt(pose,point) {
+      if(!pose.angular)return pose.velocity;
+      const tangential=K.V.cross(pose.angular,K.V.sub(point,pose.point));
+      return pose.velocity?K.V.add(pose.velocity,tangential):tangential;
+    }
+    function fieldFrame({entity,socket:name},{motion=false}={}) {
       const pose = location(entity);
       const point = pose && socket(pose,name);
-      return point && {point,rotation:pose.rotation};
+      return point && {point,rotation:pose.rotation,...(motion&&{velocity:velocityAt(pose,point)})};
     }
     function target(spec = {}) {
       if (vector(spec)) return {point:spec.slice()};

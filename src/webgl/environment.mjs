@@ -49,7 +49,7 @@ export function createEnvironment(gl, resources, {table, textureUnit}, maxSize, 
     return resources.texture();
   }
 
-  function prepare(world, frame, camera, time, width, height, reflection = false) {
+  function prepare(world, frame, camera, time, width, height, reflection, entryPlane) {
     if (frame.environment === false || !state || !skyAPI) return null;
     const skySource = frame.skyEnvironment ?? world.skyEnvironment;
     const cloudSource = frame.cloudField ?? world.cloudField;
@@ -152,8 +152,10 @@ export function createEnvironment(gl, resources, {table, textureUnit}, maxSize, 
         lightingPixels = light.cells;
       }
     } else tableData.bind(cloudLightUnit);
+    const reflectionColors=world.water?.reflectionRoutes && sky && frame.reflectionProxies!==false && frame.reflections!==false && frame.water!==false &&
+      [[0,-1,0],[1,0,0],[0,1,0]].map(ray=>skyAPI.shade(skyAPI.forReflection(sky),ray,[0,0,0]));
     return {
-      media:!!(card || fog.length),lit:fog.some(v=>v.lit),
+      reflectionColors,media:!!(card || fog.length),lit:fog.some(v=>v.lit),
       uniforms:{
         u_envData:dataUnit,u_envCard:cardUnit,u_envCloudLight:cloudLightUnit,u_envBackdrop:backdropUnit,
         u_envEye:pose.eye,u_envRight:pose.right,u_envUp:pose.up,u_envBack:pose.back,
@@ -163,7 +165,7 @@ export function createEnvironment(gl, resources, {table, textureUnit}, maxSize, 
         u_envZenith:sky?.zenith ?? blank,u_envSkyHorizon:sky?.horizon ?? blank,u_envGround:sky?.ground ?? blank,
         u_envSun:sky?.sun ?? blank,u_envSunRGB:sky?.sunColor ?? blank,
         u_envSunParams:[sky?.sunEdge ?? 0,sky?.sunCore ?? 1,sky?.sunStrength ?? 0],
-        u_envFogCount:fog.length,u_envBands:direction?.atmosphereBands ?? 0,
+        u_envEntryPlane:entryPlane, u_envFogCount:fog.length,u_envBands:direction?.atmosphereBands ?? 0,
         u_envPaletteFog: +fields.fog, u_envPaletteStart: paletteStart, u_envPaletteCard: fields.card,
         u_envCardSize:card?.resolution ?? 0,u_envCloudHardness:direction?.cloudHardness ?? .5,
         ...(card && {u_envCardFrame:[...card.center,card.radius],u_envCardRight:card.right,u_envCardUp:card.up,

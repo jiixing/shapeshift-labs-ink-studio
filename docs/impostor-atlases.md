@@ -55,9 +55,125 @@ ink-studio render examples/relightable-impostor.js --t 3 --sprite-atlas-mode car
 ink-studio render examples/relightable-impostor.js --t 3 --sprite-atlas-mode impostor --raw --out impostor.png
 ```
 
+For animated sprites, `--maps normal` writes `normal.png` alongside the
+color frames with matching tile rectangles, pivots, and timings. Use
+`--normal-space view` for a screen-facing game sprite. Its normal axes are X
+right, Y up, and +Z toward the viewer of each baked tile. The default is
+`--normal-space asset`, which keeps the object's axes for world lighting.
+Build the relightable Signal Courier example with
+`node examples/baked-sprite-normals.cjs courier-normals.html`.
+
+### Choose view angles by visible error
+
+Add `--adaptive-views` when the asset needs more headings around a fast-changing detail. The baker renders probe views at the export's art resolution. For each probe it picks the tile the impostor player would use and measures the silhouette, closed holes and narrow gaps, and protected detail. It starts with an even set on each requested elevation and adds views that most reduce visible error, including views across the orbit seam. The same registered angles apply to every exported pose.
+
+```sh
+ink-studio atlas examples/adaptive-impostors/aperture-relay.js \
+  --adaptive-views --directions 10 --min-directions 4 --view-probes 80 --view-error .03 \
+  --view-protect '[{"material":"protected-glint"}]' --w 100 --h 96 --raw \
+  --maps depth,normal,emission,silhouette --view-review --out aperture-relay
+```
+
+- `--directions` bounds the number of saved headings per elevation. `--min-directions` sets the evenly spaced anchors. A smooth orbit can stop at that minimum.
+- `--view-probes` sets the assessment grid per elevation. The baker rounds up to include every anchor exactly. `--view-error` is a threshold on the weighted error. The report records residual error when the budget or sampling grid limits the result.
+- Highlight scoring includes renderer-protected details, visible emission, and matching selectors passed to `--view-protect`. Use an object, material, or tag selector to give a small detail a say in the allocation.
+- Exported animation needs a seekable source. `--view-pose-samples` sets how many evenly selected export poses to assess, up to eight. The worst assessed pose drives each tile comparison. Captures use a fixed orthographic camera registration and independent frame histories.
+- All elevations participate in nearest-view selection and error scoring. Adaptive assessment has a combined limit of eight million probe pixels and 192 output views per pose.
+
+Use `spriteAtlas(world, { adaptive: { minDirections, probes, tolerance, poseSamples, protect }, ...options })` in Node. The atlas uses the ordinary color and auxiliary maps, with the selected yaw and pitch on each tile. `atlas.json` also records the assessment poses, component weights, selected headings and insertion errors under `adaptiveViews`.
+
+With one pose and one elevation, `--view-review` writes an offline orbit comparison under `review/`. It shows the direct render, an evenly spaced bake with the same number of views, and the selected bake on angles between the assessment probes. The overlays identify silhouette, gap and protected-detail disagreements. The directory includes the comparison clips, uniform atlas and JSON measurements.
+
+### Bake a set of moves from one rig
+
+Pass `--clips plan.json` to bake named moves into a single atlas. Each move
+uses the same orthographic framing and world pivot across its poses and views.
+Change the rig or the timing plan and run the same export again.
+
+```sh
+ink-studio atlas examples/pose-blocking.js --clips examples/signal-courier-sprite-clips.json \
+  --directions 4 --w 60 --h 60 --pivot 0,1.58,0 --maps normal,silhouette \
+  --normal-space view --out courier-atlas
+node examples/rig-sprite-bake.cjs courier-bake.html
+```
+
+The plan is a JSON array. Give each move an `id` and optional display `name`.
+Use either `range: [from, to]` with a sample rate in `fps`, or a list of
+`cels: [{ at, duration }]` for selected source poses and their exposure
+lengths. All times are in seconds. A range includes its start and ends at
+its exclusive upper bound. Its last cel can have a shorter exposure.
+For both formats, `playback` defaults to `"loop"`. Use `"once"` to hold
+the final cel after playback.
+
+Use this with a source rig that can seek to any pose time. The Node API
+accepts the plan as `spriteAtlas(world, { clips, ...options })` and can use
+the scene's normal animator or a custom `pose(world, sourceTime)` callback.
+The PNGs share tile rectangles and the manifest retains each frame's source
+time, playback time, and exposure. The manifest also names the frame IDs
+belonging to each clip.
+
+```js
+const atlas = studio.readSpriteAtlas('courier-atlas/atlas.json');
+const signal = K.sprite.placeAtlas({
+  atlas, at: [0, 1.58, 0], playback: { clip: 'right-call' }
+});
+```
+
+The placement uses the current camera direction and the selected clip's
+clock. Supply `mode: "loop"` or `"once"` in the playback object to override
+the clip default. With a manifest passed to `render --sprite-atlas`, select
+its move with `--sprite-clip right-call`.
+
 A JSON diorama can put an array of placements in `finish.spriteAtlases` and refer to each `atlas` by a path relative to the diorama. Use `--sprite-atlas off` to hide the authored placements in a comparison. A manifest passed with `--sprite-atlas` replaces the scene's placements for that render and defaults to the world origin. Set `--sprite-at x,y,z` and `--sprite-scale n` to place it.
 
-Depth positions each texel along its draw ray and participates in the scene's depth, fog, and emission passes. The renderer uses the silhouette of the selected view. The [survey drone example](../examples/relightable-impostor.js) demonstrates both placement modes under changing camera and lighting angles.
+Depth positions each texel along its draw ray and participates in the scene's depth, fog, and emission passes. By default the renderer uses the silhouette of the selected view. The [survey drone example](../examples/relightable-impostor.js) demonstrates both placement modes under changing camera and lighting angles.
+
+## Depth-reprojected views
+
+Bake registered depth and set `"viewBlend": "depth-reprojected"` to blend between authored views. This applies to standalone impostors in headless rendering and to bound sprite reconstruction in headless and WebGL rendering and picking.
+
+```sh
+ink-studio atlas examples/adaptive-impostors/aperture-relay.js \
+  --directions 8 --w 136 --h 132 --yaw -.392699 --raw \
+  --maps depth,normal,emission,silhouette --impostor-blend depth-reprojected --out relay-atlas
+node examples/depth-reprojected-impostors.cjs /tmp/relay-review
+```
+
+Ink projects each source texel into the current camera view and resolves occlusion in each projected tile. The nearest authored view sets cutout coverage. Color, normals, emission, and depth blend where the other view covers the same surface at a compatible depth. Compatible view-space normals are converted to asset coordinates before blending. With `cutoutMipmaps` enabled, the view is reprojected from its selected registered mip.
+
+Use `--impostor-blend nearest` or `--impostor-blend depth-reprojected` to compare the two playback modes from the same atlas. In Node and WebGL set `impostorBlend` on the render frame. The asset default is `nearest`. Ordinary cards and painted scenery keep their own placement rules. Missing depth, separate painted effects, and active painted transitions or fringes use the nearest tile. Exact authored orthographic views also use their original tiles.
+
+At most two source tiles contribute to a draw, within 45 degrees of the observer. The shared CPU cache stores bounded reprojected tiles in half-degree camera bins. WebGL displays the result with its existing depth-bearing quad. Bound sprite frame reports give the neighbor angle, blend weight, and counts of blended texels, nearest-only texels, and neighbor texels rejected by cutouts in `states[i].reprojection`. Large or near-singular projections fall back to the nearest tile.
+
+The Aperture Relay comparison renders the original geometry, closest-view playback, and depth-reprojected playback on the same art grid. Its orbit and JSON report show both improvements and residual errors from single-layer source depth.
+
+## Cutout coverage at a distance
+
+Add `"cutoutMipmaps": { "mode": "coverage", "cutoff": 0.5 }` to a card
+or impostor manifest for hard-edged paint such as lace, feathers, and foliage.
+Ink builds smaller versions of each view from its original alpha mask and
+selects a level using the sprite's size on the native art grid. Each level
+keeps the nearest whole number of occupied texels to the original coverage.
+Ink gives priority to the most covered footprints and resolves ties with a
+fixed spatial pattern. At very small sizes the available pixels limit which
+parts of the pattern can survive.
+
+Every occupied texel takes its color, depth, normal and emission from the
+same contributing source texel. A hole with no covered source pixels stays
+empty. Use `"mode": "average"` to compare with an ordinary area average
+and hard cutoff. The option requires at most 262,144 pixels per view.
+It applies to world-scaled cards and impostors in the headless renderer,
+and to depth-aware reconstruction in WebGL, including picking. Native-pixel
+cards and active painted transitions use their registered texels.
+
+```sh
+ink-studio atlas my-prop.js --maps depth,normal,emission --cutout-mipmaps coverage --out drone
+```
+
+Run `npm run build` and open the [Lacewing demo](../examples/atlas-cutouts/index.html)
+from a local server to compare both modes and see a bar pass between the wing depths.
+
+[Ignacio Castaño, Computing Alpha Mipmaps](https://www.ludicon.com/castano/blog/articles/computing-alpha-mipmaps/)
 
 ## Painted scenery
 
@@ -114,6 +230,34 @@ at its authored world orientation as the camera turns. Use the existing
 `depth: false` to flatten it for comparison and `lighting: false` to see the
 paint without live shading. The software renderer and CLI composite the
 paint with real geometry and depth-dependent fog.
+
+### Paint bump height
+
+Add an optional `bump` block to a scenery, card, or impostor atlas. Paint
+positive heights for raised castings, or negative heights for engraving.
+The live light responds to the slopes at the painted edges. The bump layer
+combines with any authored normal map or `lightPaint` underneath it.
+
+```json
+"bump": {
+  "strength": 1,
+  "paint": [
+    { "height": 2, "shape": { "type": "rect", "rect": [18, 12, 27, 4] } },
+    { "height": -1, "shape": { "type": "path", "points": [[21, 15], [36, 15]], "width": 1 } }
+  ]
+}
+```
+
+Heights are in texel units from −8 to 8. Later strokes replace earlier
+heights. Use a height of zero to erase a mark. `strength` defaults to 1 and
+accepts values from 0 to 4. Gradient samples stay within each tile, its
+visible silhouette, and its scenery depth band. Color, opacity and placement
+depth come from the atlas. Placement lighting and a scene light control the
+resulting shade.
+
+Run `node examples/painted-bump-demo.cjs signal-works.html` to paint, relight,
+and download the Signal Works atlas. Put its JSON and color PNG next to each
+other to load them through the usual atlas manifest path.
 
 For a single flattened painting, match the reference camera and keep turns
 short. Wider turns can expose gaps behind painted foreground details. Fill

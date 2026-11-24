@@ -2,9 +2,10 @@ const fs=require('node:fs'),path=require('node:path'),WAV=require('./wav.js');
 const {json,write}=require('./asset-files.js');
 const {openSampleLibrary}=require('./sample-library.js');
 const {resolveSampleAssets}=require('./music-sample-assets.js');
+const {readAudioSource}=require('./sound-source.js');
 
 module.exports=function instrumentCommand([mode,file,config],opt,kit) {
-  if (['analyze-session','build-session','audition-session','audition-session-takes'].includes(mode))
+  if (['align-session','analyze-session','build-session','audition-session','audition-session-takes'].includes(mode))
     return recordingSession(mode,file,config,opt,kit);
   if (['discover','keep-discovery'].includes(mode)) return discovery(mode,file,config,opt,kit);
   if (['workshop','audition-workshop','keep-workshop'].includes(mode)) {
@@ -20,7 +21,7 @@ module.exports=function instrumentCommand([mode,file,config],opt,kit) {
       Object.keys(recipe.assets).length<=24 &&
       (recipe.reference===undefined || typeof recipe.reference==='string'),'Expected an editable instrument fit manifest');
     const {assets}=resolveSampleAssets(recipe.assets,file,undefined,kit,{allowWav:true});
-    const source=recipe.reference===undefined ? undefined : WAV.read(path.resolve(path.dirname(file),recipe.reference));
+    const source=recipe.reference===undefined ? undefined : readAudioSource(path.resolve(path.dirname(file),recipe.reference),P);
     const result=P.mediaGraph.instrumentFit.audition(recipe.fit,assets,recipe.audition,source);
     const audio=path.resolve(opt.out,'fit-audition.wav'), report=path.resolve(opt.out,'report.json');
     write(audio,WAV.encode(result.value,{encoding:'pcm24'}));
@@ -30,7 +31,7 @@ module.exports=function instrumentCommand([mode,file,config],opt,kit) {
   check(fields(recipe,mode==='fit' ? ['assets','library','options'] : ['assets','library','analysis','audition','zones','env']) &&
     record(recipe.assets) &&
     Object.keys(recipe.assets).length<=24 && (recipe.library===undefined || typeof recipe.library==='string'),
-  'Instrument recipes need named WAVs, samples, edits, or prints');
+  'Instrument recipes need named audio files, samples, edits, or prints');
   const library=recipe.library===undefined ? undefined : openSampleLibrary(path.resolve(path.dirname(file),recipe.library),{kit});
   const {assets,sources}=resolveSampleAssets(recipe.assets,file,library,kit,{allowWav:true});
   if (mode==='fit') {
@@ -91,8 +92,9 @@ function recordingSession(mode,file,config,opt,kit) {
     relative(ref) : Object.fromEntries(Object.entries(ref).map(([key,value])=>
       [key,['wav','edit','print'].includes(key) ? relative(value) : value]))]));
   let output;
-  if (mode==='analyze-session' || mode==='build-session') {
-    const result=mode==='analyze-session' ? A.analyze(recipe.session,assets):A.build(recipe.session,assets,settings);
+  if (mode==='align-session' || mode==='analyze-session' || mode==='build-session') {
+    const result=mode==='align-session' ? A.align(recipe.session,assets,settings) :
+      mode==='analyze-session' ? A.analyze(recipe.session,assets) : A.build(recipe.session,assets,settings);
     const plan=path.join(dir,'session.json');
     json(plan,{session:result.session ?? result.value,assets:relocated(),
       ...(recipe.library!==undefined && {library:relative(recipe.library)})});

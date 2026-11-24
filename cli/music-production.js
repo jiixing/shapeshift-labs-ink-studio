@@ -1,6 +1,7 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const WAV=require('./wav.js');
+const { readAudioSource } = require('./sound-source.js');
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const write=(file,value)=>fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n');
 const nameValid=name=>/^[a-z][a-z0-9_-]{0,47}$/i.test(name) && !['__proto__','constructor','prototype'].includes(name);
@@ -8,9 +9,12 @@ const nameValid=name=>/^[a-z][a-z0-9_-]{0,47}$/i.test(name) && !['__proto__','co
 function assetPaths(recipe,file) {
   const folder=path.dirname(path.resolve(file));
   return Object.fromEntries(Object.entries(recipe.assets ?? {}).map(([name,spec])=>{
-    if (!nameValid(name) || typeof spec!=='string') throw new TypeError('Name each production asset and its WAV path');
+    if (!nameValid(name) || typeof spec!=='string') throw new TypeError('Name each production asset and its audio source path');
     return [name,path.resolve(folder,spec)];
   }));
+}
+function readProductionAssets(paths,P) {
+  return Object.fromEntries(Object.entries(paths).map(([name,file])=>[name,readAudioSource(file,P)]));
 }
 function writeAssetBank(folder,assets) {
   fs.mkdirSync(path.join(folder,'assets'),{recursive:true});
@@ -41,13 +45,13 @@ function writeWholePiece(folder,{value,assets},engine,{render,sampleRate}) {
   write(manifest,{format:value.format,version:value.version,report:value.report,candidates});
   return {manifest,candidates};
 }
-function timelineBank(recipe,file) {
+function timelineBank(recipe,file,onFile=value=>value) {
   const paths=assetPaths(recipe,file);
   const maps={};
   const sources=Object.fromEntries(Object.entries(recipe.sources ?? {}).map(([name,spec])=>{
     if (!nameValid(name)) throw new TypeError('Use a named production source');
     const at=typeof spec==='string' ? path.resolve(path.dirname(file),spec) : file;
-    const source=typeof spec==='string' ? read(at) : spec;
+    const source=typeof spec==='string' ? read(onFile(at)) : spec;
     for (const [key,value] of Object.entries(assetPaths(source,at))) {
       if (Object.hasOwn(paths,key) && paths[key]!==value)
         throw new RangeError('Production sources disagree on asset '+key);
@@ -150,6 +154,21 @@ function writeLockedSearch(folder,engine,source,brief,assets,paths,options) {
 
 module.exports=function command([mode,file,config],opt,kit) {
   const P=kit.KIT.music.production;
+  if (mode==='drop-gestures') return require('./music-drop-gestures.js')(file,opt,kit);
+  if (mode==='drop-studies') return require('./music-drop-studies.js')(file,opt,kit);
+  if (mode==='instrument-benchmark') return require('./music-instrument-benchmark.js')(file,opt,kit);
+  if (mode==='sound-library' || mode==='sound-pack') {
+    const library=require('./music-sound-library.js');
+    if (mode==='sound-library') {
+      if (typeof opt.out==='string') write(opt.out,library.catalog);
+      else process.stdout.write(JSON.stringify(library.catalog,null,2)+'\n');
+      return library.catalog;
+    }
+    if (typeof opt.out!=='string') throw new TypeError('Use --out with a sound pack directory');
+    const manifest=library.exportSoundPack(file,opt.out);
+    process.stdout.write(manifest+'\n');
+    return {manifest};
+  }
   if (mode==='instrument-presets') {
     if (typeof opt.out==='string') write(opt.out,P.instrumentPresets);
     else process.stdout.write(JSON.stringify(P.instrumentPresets,null,2)+'\n');
@@ -184,7 +203,7 @@ module.exports=function command([mode,file,config],opt,kit) {
   if (!file) throw new TypeError('Use music production with a mode and a recipe. Producer modes are plan-audition, review-audition and keep-audition');
   const recipe=read(file);
   const {sources,paths,timeline}=mode==='timeline' ? timelineBank(recipe,file) : {paths:assetPaths(recipe,file)};
-  const assets=Object.fromEntries(Object.entries(paths).map(([name,file])=>[name,WAV.read(file)]));
+  const assets=readProductionAssets(paths,kit.KIT.procedural);
   const production=recipe.lockedArrangement?.production ?? recipe.production ?? recipe;
   if (mode==='search-locked') {
     if (!config || typeof opt.out!=='string') throw new TypeError('Use a production, a locked brief, and --out directory');
@@ -303,3 +322,4 @@ module.exports=function command([mode,file,config],opt,kit) {
 };
 module.exports.assetPaths = assetPaths;
 module.exports.timelineBank = timelineBank;
+module.exports.readProductionAssets = readProductionAssets;
