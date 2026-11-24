@@ -24,7 +24,10 @@ const files = () =>
         .sort()
         .map(f => path.join(KIT_DIR, f))
     );
-const demoFiles = () => [path.join(__dirname, 'demos', 'labscenes.js')];
+const demoFiles = () => [
+  path.join(__dirname, 'demos', 'labscenes.js'),
+  path.join(__dirname, 'demos', 'buddha.js')
+];
 // the names the bundle defines at top level (add them to your own module.exports)
 const EXPORTS =
   'makeBuilder, makeSculpt, basis, flame, motes, pondMat, lilies, courses, PALETTES, PAL_HEX, KIT, PixelLook, SurfaceLook, SceneOptics, VOX, SplatEffects, ArtPasses, ArtInk, ArtStability, ArtEffects, VolumeField, VolumeLight';
@@ -34,7 +37,7 @@ module.exports = {
   EXPORTS,
   version: require('./package.json').version,
   bundle: () => files().map(read).join('\n'),
-  // the seven built-in demo dioramas. They push onto an array called SCENES, which must already exist
+  // the built-in demo dioramas. They push onto an array called SCENES, which must already exist
   demos: () => demoFiles().map(read).join('\n'),
   // refuse-to-build check: code written after a // comment on the same line never runs. Returns the offending lines
   lint: require('./scripts/lint.js'),

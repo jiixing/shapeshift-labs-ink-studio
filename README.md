@@ -40,6 +40,8 @@ node cli/ink-studio.js help
 node cli/ink-studio.js scenes
 node cli/ink-studio.js render watcher --t 2.6
 node cli/ink-studio.js render watcher --t 2.6 --colored
+node cli/ink-studio.js render buddha --w 900 --h 675
+node cli/ink-studio.js shimmer buddha --mode orbit --frames 16 --step 0.392699 --w 900 --h 675 --out studio/out/buddha-turnaround.gif
 npm test
 ```
 
@@ -656,7 +658,7 @@ state graphs and the retained Flooded Shrine recipe.
 | `check [scene ...]` | Re-render and compare to saved baselines. |
 | `selftest` | Run numerical toolkit and demo checks. |
 
-`<scene>` can be a built-in scene ID, a JavaScript scene file, a JSON scene file or a supported mesh file. The built-in IDs are `watcher`, `burn`, `idol`, `bench`, `stuff`, `cabinet` and `rehearsal`.
+`<scene>` can be a built-in scene ID, a JavaScript scene file, a JSON scene file or a supported mesh file. The built-in IDs are `watcher`, `burn`, `idol`, `bench`, `stuff`, `cabinet`, `rehearsal` and `buddha`. The Buddha is a static faceted-clay sculpture modeled from the six-view `buddha.jpg` reference.
 
 Common rendering controls:
 
@@ -829,7 +831,7 @@ Hosts that own the framebuffers and effects can use `createSplatPipeline(gl, { a
 Other directories:
 
 - `cli/`: command dispatch, software rendering, PNG/APNG encoding and self-tests.
-- `demos/`: the seven bundled interactive dioramas.
+- `demos/`: the bundled interactive dioramas and the static Buddha sculpture.
 - `examples/`: small runnable scenes corresponding to this guide.
 - `lab/`: larger shape experiments, mesh examples and the data-driven shrine.
 - `tests/`: unit tests for rendering, procedural tools, authoring and simulation.
