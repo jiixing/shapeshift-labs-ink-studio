@@ -5,8 +5,6 @@ function typographySpecimen(kit) {
   const colors = [
     0x080f21, 0x142b48, 0x235277, 0x438db0, 0x93cee0, 0xe3f3ed, 0x4c2925, 0x9e5839, 0xe39b58, 0xffcb80, 0xffe5ae
   ];
-
-  debugger
   const B = makeBuilder(29, colors),
     S = K.sculpt(makeSculpt(B)),
     rig = K.rig(B, S);
