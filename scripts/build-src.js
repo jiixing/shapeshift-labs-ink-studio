@@ -9,16 +9,26 @@ const names = [
   'art-ink',
   'art-passes',
   'art-stability',
+  'builder',
+  'kit/kb-mesh',
+  'kit/kc-data',
+  'kit/km-ramp',
+  'kit/kza-ascii',
   'light-schedule',
   'pixel-look',
   'reflection-plane',
   'ripple-field',
+  'route-visibility',
   'sample-coverage',
+  'sample-visibility',
   'scene-optics',
+  'sculpt',
   'splat-effects',
+  'splat-order',
   'surface-look',
   'swept-disc',
-  'volume-field'
+  'volume-field',
+  'volume-light'
 ];
 const root = path.join(__dirname, '..');
 const banner = name => '// Generated from src/' + name + '.ts by npm run build:src. Do not edit.';
@@ -33,7 +43,9 @@ async function buildSources() {
         target: 'es2020',
         sourcefile: path.relative(root, source)
       });
-      const code = banner(name) + '\n' + result.code;
+      // Toolkit sources use module scope only to keep their KIT declarations
+      // isolated during type-checking; the browser still loads plain scripts.
+      const code = banner(name) + '\n' + result.code.replace(/\nexport \{\};\n?$/, '\n');
       if (!fs.existsSync(output) || fs.readFileSync(output, 'utf8') !== code) fs.writeFileSync(output, code);
       console.log(path.relative(root, output));
     })

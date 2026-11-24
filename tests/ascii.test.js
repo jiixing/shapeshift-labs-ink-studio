@@ -6,7 +6,7 @@ const path = require('path');
 // the text module stands alone over a KIT object
 function loadAscii() {
   const KIT = {};
-  new Function('KIT', fs.readFileSync(path.join(__dirname, '../src/kit/kza-ascii.js'), 'utf8'))(KIT);
+  new Function('KIT', fs.readFileSync(path.join(__dirname, '../src/kit/kza-ascii.generated.js'), 'utf8'))(KIT);
   return KIT.ascii;
 }
 

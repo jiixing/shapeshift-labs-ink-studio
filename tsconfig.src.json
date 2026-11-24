@@ -19,16 +19,26 @@
     "src/art-ink.ts",
     "src/art-passes.ts",
     "src/art-stability.ts",
+    "src/builder.ts",
+    "src/kit/kb-mesh.ts",
+    "src/kit/kc-data.ts",
+    "src/kit/km-ramp.ts",
+    "src/kit/kza-ascii.ts",
     "src/light-schedule.ts",
     "src/pixel-look.ts",
     "src/reflection-plane.ts",
     "src/ripple-field.ts",
+    "src/route-visibility.ts",
     "src/sample-coverage.ts",
+    "src/sample-visibility.ts",
     "src/scene-optics.ts",
+    "src/sculpt.ts",
     "src/splat-effects.ts",
+    "src/splat-order.ts",
     "src/surface-look.ts",
     "src/swept-disc.ts",
-    "src/volume-field.ts"
+    "src/volume-field.ts",
+    "src/volume-light.ts"
   ],
   "exclude": ["node_modules", "src/**/*.generated.js"]
 }
