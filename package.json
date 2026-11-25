@@ -8,17 +8,19 @@
     "ink-studio": "cli/ink-studio.js"
   },
   "scripts": {
-    "pretest": "npm run build:webgl && npm run build:src && npm run build:cli",
+    "pretest": "npm run build:webgl && npm run build:src && npm run build:cli && npm run build:examples",
     "test": "node --test tests/*.test.js && node cli/ink-studio.js selftest",
-    "typecheck": "npm run typecheck:webgl && npm run typecheck:src && npm run typecheck:cli",
+    "typecheck": "npm run typecheck:webgl && npm run typecheck:src && npm run typecheck:cli && npm run typecheck:examples",
     "typecheck:webgl": "tsc --noEmit",
     "typecheck:src": "tsc -p tsconfig.src.json --noEmit",
     "typecheck:cli": "tsc -p tsconfig.cli.json --noEmit",
+    "typecheck:examples": "tsc -p tsconfig.examples.json --noEmit",
     "build:webgl": "npm run typecheck:webgl && node scripts/build-webgl.js",
     "build:src": "npm run typecheck:src && node scripts/build-src.js",
     "build:cli": "npm run typecheck:cli && node scripts/build-cli.js",
+    "build:examples": "npm run typecheck:examples && node scripts/build-examples.js",
     "lint": "node scripts/check.js",
-    "format": "prettier --write \"src/**/*.{js,ts}\" \"cli/*.{js,ts}\" \"demos/*.js\" \"lab/*.js\" index.js webgl.ts webgl.d.mts \"scripts/*.{js,ts}\""
+    "format": "prettier --write \"src/**/*.{js,ts}\" \"cli/*.{js,ts}\" \"examples/*.{js,ts}\" \"demos/*.js\" \"lab/*.js\" index.js webgl.ts webgl.d.mts \"scripts/*.{js,ts}\""
   },
   "license": "MIT",
   "engines": {

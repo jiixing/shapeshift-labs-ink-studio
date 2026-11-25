@@ -1,6 +1,7 @@
 dist/
 cli/*.generated.js
 src/**/*.generated.js
+examples/*.generated.js
 catalog.json
 tests/
 lab/assets/
