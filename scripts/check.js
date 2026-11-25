@@ -3,6 +3,11 @@ const fs = require('node:fs'),
   path = require('node:path'),
   lib = require('..'),
   webgl = path.join(__dirname, '../src/webgl'),
+  cli = path.join(__dirname, '../cli'),
+  cliFiles = fs
+    .readdirSync(cli)
+    .filter(file => file.endsWith('.ts') || file.endsWith('.generated.js'))
+    .map(file => path.join(cli, file)),
   gpuFiles = fs
     .readdirSync(webgl)
     .filter(file => file.endsWith('.ts'))
@@ -10,12 +15,7 @@ const fs = require('node:fs'),
   bad = lib.lint(
     lib
       .files()
-      .concat(
-        lib.demoFiles(),
-        path.join(__dirname, '../webgl.ts'),
-        path.join(__dirname, '../cli/ink-studio.ts'),
-        gpuFiles
-      )
+      .concat(lib.demoFiles(), path.join(__dirname, '../webgl.ts'), cliFiles, gpuFiles)
       .flatMap(file => (file.endsWith('.generated.js') ? [file, file.replace(/\.generated\.js$/, '.ts')] : [file]))
   );
 if (bad.length) {

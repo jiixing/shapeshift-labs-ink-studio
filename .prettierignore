@@ -1,5 +1,5 @@
 dist/
-cli/ink-studio.generated.js
+cli/*.generated.js
 src/**/*.generated.js
 catalog.json
 tests/

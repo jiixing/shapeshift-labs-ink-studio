@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { transform } = require('esbuild');
 const library = require('..');
 
 const migrated = [
@@ -12,10 +13,30 @@ const migrated = [
   'art-passes',
   'art-stability',
   'builder',
+  'kit/k0-math',
+  'kit/k4-art',
+  'kit/k5-fields',
+  'kit/k7-particles',
+  'kit/k8-light',
+  'kit/ka-build',
   'kit/kb-mesh',
   'kit/kc-data',
+  'kit/ke-volume',
+  'kit/kf-creature',
   'kit/km-ramp',
+  'kit/kn-effects',
+  'kit/kn-frame-splats',
+  'kit/kp-curve',
+  'kit/kq-surface-presets',
+  'kit/kr-tex',
+  'kit/ks-xpbd',
+  'kit/kt-nodes',
+  'kit/ku-motion',
+  'kit/kz-weather',
   'kit/kza-ascii',
+  'kit/p28-depth-map',
+  'kit/p29-sdf-conversion',
+  'kit/p87-keyframe-track',
   'light-schedule',
   'pixel-look',
   'reflection-plane',
@@ -32,7 +53,44 @@ const migrated = [
   'volume-field',
   'volume-light'
 ];
-const toolkit = new Set(['kit/kb-mesh', 'kit/kc-data', 'kit/km-ramp', 'kit/kza-ascii']);
+const cliMigrated = [
+  'art-passes',
+  'crisp',
+  'depth',
+  'pass-preview',
+  'png',
+  'raster-asset',
+  'scene-optics',
+  'splat-sampling',
+  'sprite-atlas',
+  'surface-shading'
+];
+const toolkit = new Set([
+  'kit/k0-math',
+  'kit/k4-art',
+  'kit/k5-fields',
+  'kit/k7-particles',
+  'kit/k8-light',
+  'kit/ka-build',
+  'kit/kb-mesh',
+  'kit/kc-data',
+  'kit/ke-volume',
+  'kit/kf-creature',
+  'kit/km-ramp',
+  'kit/kn-effects',
+  'kit/kn-frame-splats',
+  'kit/kp-curve',
+  'kit/kq-surface-presets',
+  'kit/kr-tex',
+  'kit/ks-xpbd',
+  'kit/kt-nodes',
+  'kit/ku-motion',
+  'kit/kz-weather',
+  'kit/kza-ascii',
+  'kit/p28-depth-map',
+  'kit/p29-sdf-conversion',
+  'kit/p87-keyframe-track'
+]);
 const root = path.join(__dirname, '..');
 const relative = file => path.relative(root, file).split(path.sep).join('/');
 
@@ -45,6 +103,32 @@ test('migrated source modules keep their existing paths and generated implementa
         `module.exports = require('./${path.basename(name)}.generated.js');`
       );
     } else assert.equal(require('../src/' + name + '.js'), require('../src/' + name + '.generated.js'));
+  }
+});
+
+test('migrated source implementations match their TypeScript build', async () => {
+  for (const name of migrated) {
+    const source = `src/${name}.ts`;
+    const result = await transform(fs.readFileSync(path.join(root, source), 'utf8'), {
+      loader: 'ts',
+      target: 'es2020',
+      sourcefile: source
+    });
+    const expected =
+      `// Generated from ${source} by npm run build:src. Do not edit.\n` +
+      result.code.replace(/\nexport \{\};\n?$/, '\n');
+    assert.equal(fs.readFileSync(path.join(root, 'src', name + '.generated.js'), 'utf8'), expected, name);
+  }
+});
+
+test('migrated CLI modules keep their existing paths and generated implementations', () => {
+  for (const name of cliMigrated) {
+    const facade = path.join(root, 'cli', name + '.js');
+    assert.equal(
+      fs.readFileSync(facade, 'utf8').trim(),
+      `module.exports = require('./${name}.generated.js');`
+    );
+    assert.equal(require('../cli/' + name + '.js'), require('../cli/' + name + '.generated.js'));
   }
 });
 
@@ -66,6 +150,13 @@ test('browser bundles use generated global scripts instead of CommonJS loaders',
     typeof KIT.mesh.obj, typeof KIT.mesh.field,
     typeof KIT.diorama.check, typeof KIT.diorama.build,
     typeof KIT.ramp.make, typeof KIT.ascii.draw
+  ].every(value => value === 'function')`, context), true);
+  assert.equal(vm.runInContext(`[
+    typeof KIT.V.add, typeof KIT.field, typeof KIT.tex.noise, typeof KIT.sdfgrid,
+    typeof KIT.art, typeof KIT.build.pillar, typeof KIT.flow.sum, typeof KIT.light.capture,
+    typeof KIT.look.glass, typeof KIT.creature, typeof KIT.windowLight, typeof KIT.frameSplats,
+    typeof KIT.curve.line, typeof KIT.surface.preset, typeof KIT.xpbd.sim, typeof KIT.weather.fall,
+    typeof KIT.depth.fromMap, typeof KIT.sdf.toMesh, typeof KIT.anim.keyframeTrack.create
   ].every(value => value === 'function')`, context), true);
 });
 

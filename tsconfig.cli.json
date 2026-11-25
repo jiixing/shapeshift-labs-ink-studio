@@ -13,6 +13,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["cli/ink-studio.ts", "cli/ink-studio.types.ts"],
-  "exclude": ["node_modules", "cli/ink-studio.generated.js"]
+  "include": ["cli/*.ts"],
+  "exclude": ["node_modules", "cli/*.generated.js"]
 }
