@@ -44,3 +44,13 @@ node cli/ink-studio.js render examples/lake-reflection.js --t 0.94 --colored --o
 ```
 
 Output: `studio/out/lake-reflection.png` (900×621).
+
+## 5. Vegetation growth animation
+
+Render the tree, roots, leaves, and leaf veins growing over 30 seconds:
+
+```sh
+node cli/ink-studio.js shimmer examples/vegetation-growth.js --mode still --t 0 --frames 300 --step 0.1 --delay 10 --w 480 --h 340 --colored --out studio/out/vegetation-growth.gif
+```
+
+Output: `studio/out/vegetation-growth.gif` (480×340, 300 frames, 10 FPS, 30 seconds, looping).
