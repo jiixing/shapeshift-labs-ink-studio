@@ -10,6 +10,15 @@ export interface ExampleMaterial {
   r: readonly number[];
   rf?: (x: number, y: number, z: number) => readonly number[] | null;
   mod?: (x: number, y: number, z: number) => number;
+  tex?: (
+    x: number,
+    y: number,
+    z: number,
+    ny: number,
+    intensity: number,
+    nx?: number,
+    nz?: number
+  ) => number | undefined;
   [key: string]: unknown;
 }
 
@@ -56,6 +65,7 @@ export interface ExampleSculpt {
   sky?: number;
   sunK?: number;
   sun?: ExampleVec3;
+  wob?: number;
   sdf: ExampleSdf;
   ground(material: ExampleMaterial, options?: ExampleGroundOptions): unknown;
   box(
@@ -109,6 +119,26 @@ export interface ExampleSculpt {
     options?: ExampleSolidOptions
   ): unknown;
   vox(model: ExampleVoxModel, options?: ExampleSolidOptions): unknown;
+  poly(
+    center: readonly number[],
+    planes: ReadonlyArray<{ n: readonly number[]; d: number }>,
+    material: ExampleMaterial,
+    options?: ExampleSolidOptions
+  ): unknown;
+  extrude(
+    loops: readonly (readonly (readonly number[])[])[],
+    center: readonly number[],
+    depth: number,
+    material: ExampleMaterial,
+    options?: ExampleSolidOptions
+  ): unknown;
+  displace(
+    solid: ExampleSolid,
+    field: ExampleSdf | Record<string, unknown>,
+    amplitude: number,
+    options?: ExampleSolidOptions
+  ): unknown;
+  pick(ramp: readonly number[], intensity: number): number;
   add<T extends ExampleSolidDraft>(
     solid: T,
     material?: ExampleMaterial,
@@ -410,6 +440,61 @@ export interface ExampleTilePattern {
   at(x: number, z: number): string;
 }
 
+export interface ExampleRaster {
+  width: number;
+  height: number;
+  channels: number;
+  data: { length: number; [index: number]: number };
+}
+
+export interface ExampleFluidState {
+  sample(x: number, z: number): { density: number } | undefined;
+}
+
+export interface ExampleWaterColumn {
+  depth: number;
+  level: number;
+  bed: number;
+  velocity: readonly number[];
+}
+
+export interface ExampleSurfaceChart {
+  sample(at: readonly number[]): {
+    p: ExampleVec3;
+    n: ExampleVec3;
+    tangent: ExampleVec3;
+    du: ExampleVec3;
+    dv: ExampleVec3;
+  };
+}
+
+export interface ExampleAdvectedParticle {
+  id: string;
+  position: ExampleVec3;
+  normal: ExampleVec3;
+  data: Record<string, unknown>;
+}
+
+export interface ExampleLodSplat {
+  id: string;
+  position: ExampleVec3;
+  normal: ExampleVec3;
+  radius: number;
+  color: readonly number[];
+  opacity: number;
+  owner: string;
+  material: string;
+  protect: boolean;
+}
+
+export interface ExampleSurfacePlane {
+  [key: string]: unknown;
+}
+
+export interface ExampleContactMask {
+  (x: number, y: number, z: number): number;
+}
+
 export interface ExampleToolkit {
   V: {
     norm(vector: readonly number[]): ExampleVec3;
@@ -418,6 +503,8 @@ export interface ExampleToolkit {
     sub(a: readonly number[], b: readonly number[]): ExampleVec3;
     add(a: readonly number[], b: readonly number[]): ExampleVec3;
     mul(vector: readonly number[], scale: number): ExampleVec3;
+    dot(a: readonly number[], b: readonly number[]): number;
+    cross(a: readonly number[], b: readonly number[]): ExampleVec3;
     dist(a: readonly number[], b: readonly number[]): number;
   };
   M: {
@@ -442,6 +529,15 @@ export interface ExampleToolkit {
     material: ExampleMaterial,
     options?: ExampleSolidOptions
   ): unknown;
+  surface: {
+    preset(
+      name: string,
+      base?: ExampleMaterial | readonly number[],
+      overrides?: Record<string, unknown>
+    ): ExampleMaterial;
+    material<T extends ExampleMaterial>(base: T, settings: Record<string, unknown>): T & { surface: unknown };
+  };
+  tex: { noise(scale: number, octaves: number): (x: number, y: number, z: number) => number };
   sculpt(base: unknown): ExampleSculpt;
   stage(world: CLIWorld): ExampleStage;
   pool(builder: ExampleBuilder, capacity: number): unknown;
@@ -470,6 +566,90 @@ export interface ExampleToolkit {
         rings: readonly (readonly (readonly number[])[])[],
         options: { pitch?: number; pitches?: readonly (readonly number[])[] }
       ): ExampleWeightedRoof;
+    };
+    fields: {
+      compile(
+        spec: Record<string, unknown>,
+        options?: { seed?: number }
+      ): (x: number, y: number, z: number, time?: number) => number;
+    };
+    forms: {
+      superquadric(options: {
+        radii: readonly number[];
+        exponents: readonly number[];
+        pose?: { position?: readonly number[]; rotation?: readonly number[] | number };
+      }): ExampleImplicitField;
+    };
+    materials: {
+      ramp(colors: readonly number[], options?: { steps?: number; space?: string }): { hex: number[] };
+      quilt(
+        swatch: ExampleRaster,
+        options: { width: number; height: number; patch: number; overlap: number; candidates: number; seed: number }
+      ): ExampleRaster;
+      synthesize(
+        recipe: ExampleRaster,
+        target: ExampleRaster,
+        options: {
+          mask: ArrayLike<number>;
+          seed: number;
+          guide?: number;
+          cycles?: number;
+          iterations?: number;
+          radius?: number;
+        }
+      ): ExampleRaster;
+      blueNoise(options: { width: number; height: number; sigma: number; seed: number }): {
+        sample(x: number, y: number): number;
+      };
+      triplanar(pattern: (u: number, v: number) => number, options: Record<string, unknown>): unknown;
+      threshold(field: unknown, options: Record<string, unknown>): unknown;
+      tangent(pattern: (u: number, v: number) => number, options: Record<string, unknown>): unknown;
+      outline(
+        data: ArrayLike<number>,
+        options: { size: readonly number[]; outer: number; inner: number }
+      ): { inside: ArrayLike<number>; outside: ArrayLike<number> };
+    };
+    surface: {
+      plane(options: {
+        id: string;
+        origin: readonly number[];
+        u: readonly number[];
+        v: readonly number[];
+      }): ExampleSurfacePlane;
+    };
+    contacts: {
+      traceSdf(
+        surface: ExampleSurfacePlane,
+        cover: ExampleSdf,
+        options: { id: string; cell: number }
+      ): Record<string, unknown>;
+      runoff(
+        traced: Record<string, unknown>,
+        map: (point: readonly number[]) => { p: ExampleVec3; n: ExampleVec3 } | null,
+        options: { spacing: number; step: number; distance: number }
+      ): unknown;
+      field(source: unknown): {
+        mask(options: {
+          inner: number;
+          outer: number;
+          weight?: (hit: { t: number }, point: readonly number[]) => number;
+        }): ExampleContactMask;
+      };
+    };
+    lod: {
+      mergeSplats(
+        samples: readonly ExampleLodSplat[],
+        options: {
+          maxDistance: number;
+          maxRadius: number;
+          minNormal: number;
+          maxColor: number;
+          viewDirections: readonly (readonly number[])[];
+          lockSeams: boolean;
+          ratio: number;
+        }
+      ): { splats: ExampleLodSplat[] };
+      packSplats(rows: readonly ExampleLodSplat[]): { data: Float32Array; count: number };
     };
     hydrology: {
       analyze(
@@ -514,6 +694,67 @@ export interface ExampleToolkit {
         edges: readonly ExampleNetworkEdge[],
         terminals: readonly number[]
       ): ExampleNetwork;
+      polyline(points: readonly (readonly number[])[]): ExampleRoute & { length: number };
+      travelTime(
+        outlets: readonly (readonly number[])[],
+        options: {
+          bounds: { min: readonly number[]; max: readonly number[] };
+          cell: number;
+          speed: (x: number, z: number) => number;
+        }
+      ): {
+        trace(
+          start: readonly number[],
+          options: { height: (x: number, z: number) => number }
+        ): { status: string; route: ExampleRoute };
+      };
+      visibility(
+        start: readonly number[],
+        end: readonly number[],
+        obstacles: readonly (readonly (readonly number[])[])[]
+      ): { route: ExampleRoute };
+      spline(
+        route: ExampleRoute,
+        options: {
+          radius: number;
+          spacing: number;
+          clearance: (x: number, y: number, z: number) => number;
+          minClearance: number;
+        }
+      ): { status: string; route: ExampleRoute };
+      tensor(fields: ReadonlyArray<Record<string, unknown>>): unknown;
+      growStreets(
+        seeds: ReadonlyArray<{ point: readonly number[]; angle: number }>,
+        options: {
+          bounds: { min: readonly number[]; max: readonly number[] };
+          mask: (x: number, z: number) => boolean;
+          field: unknown;
+          seed: number;
+          branchChance: number;
+          step: number;
+          maxSegments: number;
+          maxAge: number;
+        }
+      ): { edges: Array<{ route: ExampleRoute }>; points: ExampleVec3[] };
+      followTensor(
+        field: unknown,
+        seeds: ReadonlyArray<readonly number[] | { point: readonly number[]; family?: string }>,
+        options: {
+          bounds: { min: readonly number[]; max: readonly number[] };
+          mask: (x: number, z: number) => boolean;
+          step: number;
+          length: number;
+        }
+      ): { streets: Array<{ route: ExampleRoute; family?: string }> };
+      parcels(
+        site: readonly (readonly number[])[],
+        options: { pitch: number; depth: number; gap: number }
+      ): {
+        lots: Array<{
+          fragments: readonly (readonly (readonly number[])[])[];
+          frontage: readonly (readonly number[])[];
+        }>;
+      };
     };
     sampling: {
       eliminate(
@@ -656,6 +897,55 @@ export interface ExampleToolkit {
         wetDiffusion?: number;
       }): ExampleWeather;
       materialStateGraph(machine: ExampleStateMachine, initial: Array<{ id: string }>): ExampleMaterialStateGraph;
+      stableFluid(options: {
+        cell: number;
+        width: number;
+        height: number;
+        origin: readonly number[];
+        maxDt?: number;
+        pressureIterations?: number;
+        mask: (x: number, z: number) => boolean;
+        initial: (x: number, z: number) => { density: number; velocity: readonly number[] };
+      }): {
+        step(
+          time: number,
+          options: {
+            source: (x: number, z: number, time: number) => number;
+            force: (x: number, z: number, time: number) => readonly number[];
+            viscosity?: number;
+            diffusion?: number;
+            dissipation?: number;
+          }
+        ): ExampleFluidState;
+      };
+      shallowWater(options: {
+        cell: number;
+        width: number;
+        height: number;
+        origin: readonly number[];
+        terrain: (x: number, z: number) => number;
+        mask: (x: number, z: number) => boolean;
+        initial: (x: number, z: number) => number;
+      }): {
+        step(
+          time: number,
+          options: { friction?: number }
+        ): { sample(x: number, z: number): ExampleWaterColumn | undefined };
+      };
+      surfaceAdvection(
+        chart: (time: number) => ExampleSurfaceChart,
+        particles: ReadonlyArray<{ id: string; uv: readonly number[]; data: Record<string, unknown> }>,
+        options: {
+          step: number;
+          velocity: (
+            x: number,
+            y: number,
+            z: number,
+            time: number,
+            particle: { uv: readonly number[] }
+          ) => readonly number[];
+        }
+      ): { advance(time: number): { particles: ExampleAdvectedParticle[] } };
     };
   };
   depth: { fromMap(input: ExampleDepthInput): ExampleDepthModel };
