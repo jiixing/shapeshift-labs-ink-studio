@@ -74,8 +74,19 @@ const migrated = [
   'kit/p14-stable-populations',
   'kit/p15-socket-matching',
   'kit/p16-material-bands',
+  'kit/p17-swept-masks',
+  'kit/p18-profiled-cuts',
+  'kit/p19-clearance-probes',
+  'kit/p20-visual-emitters',
+  'kit/p21-routes',
+  'kit/p22-procedural-styles',
+  'kit/p27-surface-contacts',
   'kit/p28-depth-map',
+  'kit/p28-fitted-ribbons',
   'kit/p29-sdf-conversion',
+  'kit/p30-surface-cells',
+  'kit/p31-surface-cell-loft',
+  'kit/p33-panel-frames',
   'kit/p87-keyframe-track',
   'light-schedule',
   'pixel-look',
@@ -167,8 +178,19 @@ const toolkit = new Set([
   'kit/p14-stable-populations',
   'kit/p15-socket-matching',
   'kit/p16-material-bands',
+  'kit/p17-swept-masks',
+  'kit/p18-profiled-cuts',
+  'kit/p19-clearance-probes',
+  'kit/p20-visual-emitters',
+  'kit/p21-routes',
+  'kit/p22-procedural-styles',
+  'kit/p27-surface-contacts',
   'kit/p28-depth-map',
+  'kit/p28-fitted-ribbons',
   'kit/p29-sdf-conversion',
+  'kit/p30-surface-cells',
+  'kit/p31-surface-cell-loft',
+  'kit/p33-panel-frames',
   'kit/p87-keyframe-track'
 ]);
 const root = path.join(__dirname, '..');
@@ -257,6 +279,14 @@ test('browser bundles use generated global scripts instead of CommonJS loaders',
     typeof KIT.procedural.basins.surface, typeof KIT.procedural.terraces.surface,
     typeof KIT.procedural.spans.catenary, typeof KIT.procedural.populations.layout,
     typeof KIT.procedural.proximity.connect, typeof KIT.procedural.materialBands
+  ].every(value => value === 'function')`, context), true);
+  assert.equal(vm.runInContext(`[
+    typeof KIT.procedural.masks.compose, typeof KIT.procedural.profileCut,
+    typeof KIT.procedural.clearance.field, typeof KIT.procedural.emitters.compile,
+    typeof KIT.procedural.routes.aroundConvex, typeof KIT.procedural.styles.catalog,
+    typeof KIT.procedural.contacts.intersections, typeof KIT.procedural.fittedRibbon,
+    typeof KIT.procedural.surfaceCells.clip, typeof KIT.procedural.surfaceCells.loft,
+    typeof KIT.procedural.panelFrames
   ].every(value => value === 'function')`, context), true);
 });
 

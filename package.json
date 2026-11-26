@@ -20,7 +20,7 @@
     "build:cli": "npm run typecheck:cli && node scripts/build-cli.js",
     "build:examples": "npm run typecheck:examples && node scripts/build-examples.js",
     "lint": "node scripts/check.js",
-    "format": "prettier --write \"src/**/*.{js,ts}\" \"cli/*.{js,ts}\" \"examples/*.{js,ts}\" \"demos/*.js\" \"lab/*.js\" index.js webgl.ts webgl.d.mts \"scripts/*.{js,ts}\""
+    "format": "prettier --write \"src/**/*.{js,ts}\" \"cli/*.{js,ts}\" \"examples/**/*.{js,ts}\" \"demos/*.js\" \"lab/*.js\" index.js webgl.ts webgl.d.mts \"scripts/*.{js,ts}\""
   },
   "license": "MIT",
   "engines": {

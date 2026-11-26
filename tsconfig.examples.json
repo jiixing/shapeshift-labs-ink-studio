@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -12,6 +12,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["examples/*.ts"],
-  "exclude": ["node_modules", "examples/*.generated.js"]
+  "include": ["examples/**/*.ts"],
+  "exclude": ["node_modules", "examples/**/*.generated.js"]
 }

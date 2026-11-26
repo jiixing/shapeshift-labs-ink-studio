@@ -1,0 +1,239 @@
+/* Exact convex footprints in a carrier chart. Logical keys survive clipping
+   into several pieces, so appearance and local edits can follow the cell. */
+type P30SurfaceCellsVec2 = [number, number];
+type P30SurfaceCellsPolygon = P30SurfaceCellsVec2[];
+type P30SurfaceCellsPlane = (point: P30SurfaceCellsVec2) => number;
+
+interface P30SurfaceCellsBounds {
+  min: P30SurfaceCellsVec2;
+  max: P30SurfaceCellsVec2;
+}
+
+interface P30SurfaceCellsConvex {
+  points: P30SurfaceCellsPolygon;
+  planes: P30SurfaceCellsPlane[];
+  bounds: P30SurfaceCellsBounds;
+}
+
+interface P30SurfaceCellsSplit {
+  inside: P30SurfaceCellsPolygon;
+  outside: P30SurfaceCellsPolygon;
+}
+
+interface P30SurfaceCellsCell {
+  key?: unknown;
+  id?: unknown;
+  polygon?: unknown;
+  inset?: {
+    min?: unknown;
+    max?: unknown;
+  };
+}
+
+interface P30SurfaceCellsClipOptions {
+  boundary?: unknown;
+  holes?: readonly unknown[];
+  budget?: number;
+  work?: number;
+}
+
+interface P30SurfaceCellsResultCell {
+  key: string;
+  fragments: P30SurfaceCellsPolygon[];
+}
+
+interface P30SurfaceCellsResult {
+  cells: P30SurfaceCellsResultCell[];
+  fragmentCount: number;
+}
+
+interface P30SurfaceCellsData {
+  freeze<T>(value: T): Readonly<T>;
+}
+
+interface P30SurfaceCellsClipApi {
+  clip(cells: readonly P30SurfaceCellsCell[], options?: P30SurfaceCellsClipOptions): Readonly<P30SurfaceCellsResult>;
+}
+
+interface P30SurfaceCellsApi {
+  data: P30SurfaceCellsData;
+  surfaceCells?: P30SurfaceCellsClipApi;
+}
+
+type P30SurfaceCellsKitHost =
+  | { procedural: P30SurfaceCellsApi; authoring?: P30SurfaceCellsApi }
+  | { procedural?: P30SurfaceCellsApi; authoring: P30SurfaceCellsApi };
+
+declare const KIT: P30SurfaceCellsKitHost;
+
+(function (K: P30SurfaceCellsKitHost) {
+  const P = (K.procedural || K.authoring)!;
+  const EPS = 1e-8;
+  const point = (p: unknown): p is P30SurfaceCellsVec2 =>
+    Array.isArray(p) && p.length === 2 && Array.from(p).every(v => Number.isFinite(v) && Math.abs(v) <= 1e6);
+  const cross = (a: P30SurfaceCellsVec2, b: P30SurfaceCellsVec2, c: P30SurfaceCellsVec2) =>
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const area = (p: P30SurfaceCellsPolygon) => p.slice(2).reduce((sum, q, i) => sum + cross(p[0], p[i + 1], q), 0) / 2;
+
+  function bounds(points: readonly P30SurfaceCellsVec2[]): P30SurfaceCellsBounds {
+    const min: P30SurfaceCellsVec2 = [Infinity, Infinity];
+    const max: P30SurfaceCellsVec2 = [-Infinity, -Infinity];
+    for (const p of points) {
+      min[0] = Math.min(min[0], p[0]);
+      min[1] = Math.min(min[1], p[1]);
+      max[0] = Math.max(max[0], p[0]);
+      max[1] = Math.max(max[1], p[1]);
+    }
+    return { min, max };
+  }
+
+  function convex(raw: unknown): P30SurfaceCellsConvex {
+    if (!Array.isArray(raw) || raw.length < 3 || raw.length > 128 || !Array.from(raw).every(point))
+      throw new Error('Surface cells need 3 to 128 finite chart points per polygon');
+    const signedArea = area(raw);
+    if (Math.abs(signedArea) <= EPS * EPS) throw new Error('Surface cells need a nonzero polygon area');
+    const points = raw.map((p: P30SurfaceCellsVec2) => p.slice() as P30SurfaceCellsVec2);
+    if (signedArea < 0) points.reverse();
+    const unique = new Set<string>();
+    const planes = points.map((a, i) => {
+      const key = JSON.stringify(a);
+      if (unique.has(key)) throw new Error('Surface cell polygons need distinct vertices');
+      unique.add(key);
+      const b = points[(i + 1) % points.length];
+      const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (length <= EPS) throw new Error('Surface cell polygons need nonzero edges');
+      const dx = (b[0] - a[0]) / length;
+      const dy = (b[1] - a[1]) / length;
+      const side = ([x, y]: P30SurfaceCellsVec2) => dx * (y - a[1]) - dy * (x - a[0]);
+      if (points.some(p => side(p) < -EPS)) throw new Error('Surface cell clip polygons must be convex');
+      return side;
+    });
+    return { points, planes, bounds: bounds(points) };
+  }
+
+  function split(polygon: P30SurfaceCellsPolygon, side: P30SurfaceCellsPlane): P30SurfaceCellsSplit {
+    const inside: P30SurfaceCellsPolygon = [];
+    const outside: P30SurfaceCellsPolygon = [];
+    const values = polygon.map(side);
+    for (let i = 0; i < polygon.length; i++) {
+      const j = (i + 1) % polygon.length;
+      const a = polygon[i];
+      const d = values[i];
+      const next = values[j];
+      if (d >= -EPS) inside.push(a);
+      if (d <= EPS) outside.push(a);
+      if ((d < -EPS && next > EPS) || (d > EPS && next < -EPS)) {
+        const b = polygon[j];
+        const t = d / (d - next);
+        const crossing: P30SurfaceCellsVec2 = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        inside.push(crossing);
+        outside.push(crossing);
+      }
+    }
+    return {
+      inside: inside.length >= 3 && area(inside) > EPS * EPS ? inside : [],
+      outside: outside.length >= 3 && area(outside) > EPS * EPS && values.some(d => d < -EPS) ? outside : []
+    };
+  }
+
+  function clip(
+    cells: readonly P30SurfaceCellsCell[],
+    { boundary, holes = [], budget = 8192, work = 250000 }: P30SurfaceCellsClipOptions = {}
+  ) {
+    if (
+      !Array.isArray(cells) ||
+      !Array.isArray(holes) ||
+      holes.length > 4096 ||
+      !Number.isSafeInteger(budget) ||
+      budget < 1 ||
+      budget > 65536 ||
+      cells.length > budget ||
+      !Number.isSafeInteger(work) ||
+      work < 1 ||
+      work > 4000000
+    )
+      throw new Error('Surface cell clipping needs bounded cells, holes and work budgets');
+    const domain = boundary === undefined ? null : convex(boundary);
+    const cutouts = Array.from(holes, convex);
+    const results: P30SurfaceCellsResultCell[] = [];
+    const keys = new Map<string, P30SurfaceCellsResultCell>();
+    let fragmentCount = 0;
+    let used = 0;
+
+    function cut(polygon: P30SurfaceCellsPolygon, side: P30SurfaceCellsPlane): P30SurfaceCellsSplit {
+      used += polygon.length;
+      if (used > work) throw new Error('Surface cell clipping exceeds its work budget');
+      return split(polygon, side);
+    }
+    function subtract(polygon: P30SurfaceCellsPolygon, hole: P30SurfaceCellsConvex): P30SurfaceCellsPolygon[] {
+      const b = bounds(polygon);
+      if (b.min.some((v, i) => v >= hole.bounds.max[i] || b.max[i] <= hole.bounds.min[i])) return [polygon];
+      let inside = polygon;
+      const pieces: P30SurfaceCellsPolygon[] = [];
+      for (const plane of hole.planes) {
+        const part = cut(inside, plane);
+        if (!part.inside.length) return [polygon];
+        inside = part.inside;
+        if (part.outside.length) pieces.push(part.outside);
+      }
+      return pieces;
+    }
+
+    for (const cell of cells) {
+      const key = cell?.key ?? cell?.id;
+      if (typeof key !== 'string' || !key) throw new Error('Surface cells need nonempty string keys');
+      let polygon: P30SurfaceCellsPolygon;
+      if (cell.polygon) polygon = convex(cell.polygon).points;
+      else {
+        const { min, max } = cell.inset || {};
+        if (!point(min) || !point(max) || min[0] >= max[0] || min[1] >= max[1])
+          throw new Error('Surface cells need a convex footprint or ordered inset bounds');
+        polygon = [
+          min.slice() as P30SurfaceCellsVec2,
+          [max[0], min[1]],
+          max.slice() as P30SurfaceCellsVec2,
+          [min[0], max[1]]
+        ];
+      }
+      if (domain)
+        for (const plane of domain.planes) {
+          polygon = cut(polygon, plane).inside;
+          if (!polygon.length) break;
+        }
+      if (!polygon.length) continue;
+      let fragments = [polygon];
+      const footprint = bounds(polygon);
+      for (const hole of cutouts) {
+        if (
+          footprint.min[0] >= hole.bounds.max[0] ||
+          footprint.max[0] <= hole.bounds.min[0] ||
+          footprint.min[1] >= hole.bounds.max[1] ||
+          footprint.max[1] <= hole.bounds.min[1]
+        )
+          continue;
+        const next: P30SurfaceCellsPolygon[] = [];
+        for (const fragment of fragments) {
+          next.push(...subtract(fragment, hole));
+          if (next.length + fragmentCount > budget)
+            throw new Error('Surface cell clipping exceeds its fragment budget');
+        }
+        fragments = next;
+        if (!fragments.length) break;
+      }
+      fragmentCount += fragments.length;
+      if (fragmentCount > budget) throw new Error('Surface cell clipping exceeds its fragment budget');
+      if (!fragments.length) continue;
+      if (!keys.has(key)) {
+        const item: P30SurfaceCellsResultCell = { key, fragments: [] };
+        keys.set(key, item);
+        results.push(item);
+      }
+      keys.get(key)!.fragments.push(...fragments);
+    }
+    return P.data.freeze({ cells: results, fragmentCount });
+  }
+
+  P.surfaceCells = { clip };
+})(KIT);
+
+export {};

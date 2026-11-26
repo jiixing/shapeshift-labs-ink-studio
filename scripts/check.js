@@ -5,6 +5,7 @@ const fs = require('node:fs'),
   webgl = path.join(__dirname, '../src/webgl'),
   cli = path.join(__dirname, '../cli'),
   examples = path.join(__dirname, '../examples'),
+  proceduralExamples = path.join(examples, 'procedural'),
   cliFiles = fs
     .readdirSync(cli)
     .filter(file => file.endsWith('.ts') || file.endsWith('.generated.js'))
@@ -13,6 +14,10 @@ const fs = require('node:fs'),
     .readdirSync(examples)
     .filter(file => file.endsWith('.ts') || file.endsWith('.generated.js'))
     .map(file => path.join(examples, file)),
+  proceduralFiles = fs
+    .readdirSync(proceduralExamples)
+    .filter(file => file.endsWith('.ts') || file.endsWith('.generated.js'))
+    .map(file => path.join(proceduralExamples, file)),
   gpuFiles = fs
     .readdirSync(webgl)
     .filter(file => file.endsWith('.ts'))
@@ -20,7 +25,7 @@ const fs = require('node:fs'),
   bad = lib.lint(
     lib
       .files()
-      .concat(lib.demoFiles(), path.join(__dirname, '../webgl.ts'), cliFiles, exampleFiles, gpuFiles)
+      .concat(lib.demoFiles(), path.join(__dirname, '../webgl.ts'), cliFiles, exampleFiles, proceduralFiles, gpuFiles)
       .flatMap(file => (file.endsWith('.generated.js') ? [file, file.replace(/\.generated\.js$/, '.ts')] : [file]))
   );
 if (bad.length) {

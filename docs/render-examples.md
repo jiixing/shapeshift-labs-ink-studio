@@ -54,3 +54,17 @@ node cli/ink-studio.js shimmer examples/vegetation-growth.js --mode still --t 0 
 ```
 
 Output: `studio/out/vegetation-growth.gif` (480×340, 300 frames, 10 FPS, 30 seconds, looping).
+
+## 6. Procedural geometry gallery
+
+`examples/procedural/gallery.js` is a browser canvas gallery, not a CLI scene module. Build its standalone HTML page instead of passing it to `ink-studio render`:
+
+```sh
+node examples/procedural/build.js
+```
+
+Output: `dist/procedural-gallery.html`. Open that file in a browser to view and rotate the gallery examples. To choose another output path:
+
+```sh
+node examples/procedural/build.js path/to/procedural-gallery.html
+```

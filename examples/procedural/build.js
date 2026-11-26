@@ -6,7 +6,7 @@ const lib = require('../..');
 const output = path.resolve(process.argv[2] || 'dist/procedural-gallery.html');
 const source = [
   lib.bundle(),
-  ...['authoring-example.js', 'gallery.js'].map(name => fs.readFileSync(path.join(__dirname, name), 'utf8'))
+  ...['authoring-example.js', 'gallery.generated.js'].map(name => fs.readFileSync(path.join(__dirname, name), 'utf8'))
 ].join('\n');
 const template = fs.readFileSync(path.join(__dirname, 'gallery.html'), 'utf8');
 fs.mkdirSync(path.dirname(output), { recursive: true });

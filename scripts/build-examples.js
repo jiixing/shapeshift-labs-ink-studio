@@ -1,4 +1,4 @@
-// Build typed CommonJS examples while keeping their .js paths as stable facades.
+// Build typed CommonJS examples and the classic-script procedural gallery.
 const fs = require('node:fs');
 const path = require('node:path');
 const { transform } = require('esbuild');
@@ -38,9 +38,22 @@ const names = [
 const root = path.join(__dirname, '..');
 const banner = name => `// Generated from examples/${name}.ts by npm run build:examples. Do not edit.`;
 
+async function buildGallery() {
+  const source = path.join(root, 'examples', 'procedural', 'gallery.ts');
+  const output = path.join(root, 'examples', 'procedural', 'gallery.generated.js');
+  const result = await transform(fs.readFileSync(source, 'utf8'), {
+    loader: 'ts',
+    target: 'es2020',
+    sourcefile: path.relative(root, source)
+  });
+  const code = banner('procedural/gallery') + '\n' + result.code.replace(/\nexport \{\};\n?$/, '\n');
+  if (!fs.existsSync(output) || fs.readFileSync(output, 'utf8') !== code) fs.writeFileSync(output, code);
+  console.log(path.relative(root, output));
+}
+
 async function buildExamples() {
-  await Promise.all(
-    names.map(async name => {
+  await Promise.all([
+    ...names.map(async name => {
       const source = path.join(root, 'examples', name + '.ts');
       const output = path.join(root, 'examples', name + '.generated.js');
       const result = await transform(fs.readFileSync(source, 'utf8'), {
@@ -52,8 +65,9 @@ async function buildExamples() {
       const code = banner(name) + '\n' + result.code;
       if (!fs.existsSync(output) || fs.readFileSync(output, 'utf8') !== code) fs.writeFileSync(output, code);
       console.log(path.relative(root, output));
-    })
-  );
+    }),
+    buildGallery()
+  ]);
 }
 
 buildExamples().catch(() => {

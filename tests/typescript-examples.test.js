@@ -66,3 +66,25 @@ test('typed example implementations match their TypeScript build', async () => {
     assert.equal(fs.readFileSync(path.join(root, 'examples', name + '.generated.js'), 'utf8'), expected, name);
   }
 });
+
+test('procedural gallery keeps its facade and generated browser script', async () => {
+  const source = 'examples/procedural/gallery.ts';
+  const typed = fs.readFileSync(path.join(root, source), 'utf8');
+  assert.match(typed, /import type \{/);
+  assert.equal(
+    fs.readFileSync(path.join(root, 'examples/procedural/gallery.js'), 'utf8').trim(),
+    "module.exports = require('./gallery.generated.js');"
+  );
+  const result = await transform(typed, { loader: 'ts', target: 'es2020', sourcefile: source });
+  const expected =
+    `// Generated from ${source} by npm run build:examples. Do not edit.\n` +
+    result.code.replace(/\nexport \{\};\n?$/, '\n');
+  assert.equal(
+    fs.readFileSync(path.join(root, 'examples/procedural/gallery.generated.js'), 'utf8'),
+    expected
+  );
+  assert.match(
+    fs.readFileSync(path.join(root, 'examples/procedural/build.js'), 'utf8'),
+    /gallery\.generated\.js/
+  );
+});
