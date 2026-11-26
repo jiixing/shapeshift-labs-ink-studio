@@ -85,8 +85,13 @@ const migrated = [
   'kit/p28-fitted-ribbons',
   'kit/p29-sdf-conversion',
   'kit/p30-surface-cells',
+  'kit/p31-procedural-heap',
   'kit/p31-surface-cell-loft',
   'kit/p33-panel-frames',
+  'kit/p41-shape-grammar',
+  'kit/p63-socket-assembly',
+  'kit/p64-assembly-damage',
+  'kit/p65-load-paths',
   'kit/p87-keyframe-track',
   'light-schedule',
   'pixel-look',
@@ -189,8 +194,13 @@ const toolkit = new Set([
   'kit/p28-fitted-ribbons',
   'kit/p29-sdf-conversion',
   'kit/p30-surface-cells',
+  'kit/p31-procedural-heap',
   'kit/p31-surface-cell-loft',
   'kit/p33-panel-frames',
+  'kit/p41-shape-grammar',
+  'kit/p63-socket-assembly',
+  'kit/p64-assembly-damage',
+  'kit/p65-load-paths',
   'kit/p87-keyframe-track'
 ]);
 const root = path.join(__dirname, '..');
@@ -287,6 +297,11 @@ test('browser bundles use generated global scripts instead of CommonJS loaders',
     typeof KIT.procedural.contacts.intersections, typeof KIT.procedural.fittedRibbon,
     typeof KIT.procedural.surfaceCells.clip, typeof KIT.procedural.surfaceCells.loft,
     typeof KIT.procedural.panelFrames
+  ].every(value => value === 'function')`, context), true);
+  assert.equal(vm.runInContext(`[
+    typeof ProceduralHeap, typeof KIT.procedural.grammar.expand,
+    typeof KIT.procedural.grammar.assemble, typeof KIT.procedural.construct.loadPaths,
+    typeof KIT.procedural.construct.damage
   ].every(value => value === 'function')`, context), true);
 });
 

@@ -26,6 +26,7 @@ const names = [
   'route-fields',
   'sampling-detail',
   'sculpt',
+  'socket-walkway',
   'splat-effects',
   'street-layouts',
   'surface-advection',

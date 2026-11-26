@@ -394,7 +394,7 @@ export interface ExampleWeightedRoof {
 export interface ExampleRoute {
   points: ExampleVec3[];
   bounds: { min: ExampleVec3; max: ExampleVec3 };
-  sample(value: number): { point: ExampleVec3 };
+  sample(value: number): ExampleAssemblyFrame;
   closest(point: readonly number[]): { distance: number };
 }
 
@@ -438,6 +438,109 @@ export interface ExampleTilePattern {
   width: number;
   height: number;
   at(x: number, z: number): string;
+}
+
+export interface ExampleAssemblyFrame {
+  point: ExampleVec3;
+  tangent: ExampleVec3;
+  side: ExampleVec3;
+  normal: ExampleVec3;
+}
+
+export interface ExampleAssemblyRoute {
+  length: number;
+  sample(value: number): ExampleAssemblyFrame;
+}
+
+export interface ExampleAssemblyModule {
+  id: string;
+  length: number;
+  min?: number;
+  max?: number;
+  in?: string;
+  out?: string;
+  reversible?: boolean;
+  cost?: number;
+  data?: Record<string, unknown>;
+}
+
+export interface ExampleAssemblyPart {
+  key: string;
+  module: string;
+  reversed: boolean;
+  length: number;
+  natural: number;
+  t0: number;
+  t1: number;
+  data: Record<string, unknown>;
+  in: string;
+  out: string;
+  start: ExampleAssemblyFrame;
+  end: ExampleAssemblyFrame;
+  frame: ExampleAssemblyFrame;
+}
+
+export interface ExampleAssembly {
+  id: string;
+  status: string;
+  cost: number;
+  parts: ExampleAssemblyPart[];
+  intervals: Array<{ a: string; b: string; length: number; status: string }>;
+  anchors: Array<{ id: string; at: number; enter: string; out: string }>;
+  work: { checks: number; queue: number; priceSearchComplete: boolean };
+}
+
+export interface ExampleLoadBearing {
+  key: string;
+  top: ExampleVec3;
+  base: ExampleVec3;
+  height: number;
+  column: boolean;
+  load: number;
+  spans: string[];
+}
+
+export interface ExampleLoadBeam {
+  key: string;
+  span: string;
+  a: ExampleVec3;
+  b: ExampleVec3;
+  length: number;
+  load: number;
+  supports: string[];
+}
+
+export interface ExampleLoadBrace {
+  key: string;
+  a: ExampleVec3;
+  b: ExampleVec3;
+  beam: string;
+  column: string;
+}
+
+export interface ExampleLoadResult {
+  status: string;
+  spans: Array<{ id: string; status: string; limit?: number; supports?: string[] }>;
+  bearings: ExampleLoadBearing[];
+  beams: ExampleLoadBeam[];
+  braces: ExampleLoadBrace[];
+  work: { samples: number; checks: number };
+}
+
+export interface ExampleDamageState {
+  key: string;
+  role: string;
+  state: string;
+  data: Record<string, unknown>;
+  active: boolean;
+  supported: boolean;
+}
+
+export interface ExampleDamageResult {
+  status: string;
+  states: ExampleDamageState[];
+  events: Array<{ key: string; from: string; to: string; tick: number; cause: string }>;
+  work: { steps: number; checks: number };
 }
 
 export interface ExampleRaster {
@@ -566,6 +669,59 @@ export interface ExampleToolkit {
         rings: readonly (readonly (readonly number[])[])[],
         options: { pitch?: number; pitches?: readonly (readonly number[])[] }
       ): ExampleWeightedRoof;
+      loadPaths(
+        nodes: ReadonlyArray<{ id: string; point: readonly number[]; bearing?: boolean }>,
+        spans: ReadonlyArray<{ id: string; a: string; b: string; load?: number }>,
+        options: {
+          ground: (x: number, z: number) => number | null | undefined;
+          clear?: (
+            a: readonly number[],
+            b: readonly number[],
+            info: { role: string; key?: string; span?: string }
+          ) => boolean;
+          maxSpan?: number;
+          maxDrop?: number;
+          postStep?: number;
+          nominalLoad?: number;
+          minHeight?: number;
+          braceAfter?: number;
+          braceRun?: number;
+          maxSamples?: number;
+          maxChecks?: number;
+          mergePosts?: boolean;
+        }
+      ): ExampleLoadResult;
+      damage(
+        parts: ReadonlyArray<{
+          key: string;
+          role?: string;
+          module?: string;
+          state?: string;
+          data?: Record<string, unknown>;
+        }>,
+        options: {
+          rules: ReadonlyArray<{
+            id: string;
+            from?: string;
+            to: string;
+            role?: string;
+            chance?: number;
+            weight?: number;
+            when?: (
+              part: ExampleDamageState,
+              context: { tick: number; exposure: number; from: string; supported: boolean }
+            ) => boolean;
+          }>;
+          supports?: ReadonlyArray<{ child: string; by: string[]; required?: number }>;
+          pins?: ReadonlyArray<{ key: string; state?: string }>;
+          seed?: number;
+          steps?: number;
+          exposure?: (part: ExampleDamageState) => number;
+          inactive?: string[];
+          failure?: string;
+          maxChecks?: number;
+        }
+      ): ExampleDamageResult;
     };
     fields: {
       compile(
@@ -802,6 +958,20 @@ export interface ExampleToolkit {
       }): ExampleLayoutMap;
     };
     grammar: {
+      assemble(
+        route: ExampleAssemblyRoute,
+        modules: readonly ExampleAssemblyModule[],
+        options?: {
+          id?: string;
+          start?: string;
+          end?: string;
+          pins?: ReadonlyArray<{ id: string; at: number; socket: string; in?: string; out?: string }>;
+          joins?: ReadonlyArray<readonly [string, string]>;
+          seed?: number;
+          maxParts?: number;
+          maxChecks?: number;
+        }
+      ): ExampleAssembly;
       rewriteGrid(
         rows: readonly string[],
         rules: ReadonlyArray<{ id: string; find: readonly string[]; replace: readonly string[]; weight?: number }>,
