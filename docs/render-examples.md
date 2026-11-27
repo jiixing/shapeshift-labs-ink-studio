@@ -68,3 +68,13 @@ Output: `dist/procedural-gallery.html`. Open that file in a browser to view and 
 ```sh
 node examples/procedural/build.js path/to/procedural-gallery.html
 ```
+
+## 7. Socket walkway TypeScript example
+
+The typed source is `examples/socket-walkway.ts`. Render it through the stable CommonJS facade `examples/socket-walkway.js`, which loads the generated TypeScript implementation:
+
+```sh
+node cli/ink-studio.js render examples/socket-walkway.js --colored --out studio/out/socket-walkway.png
+```
+
+Output: `studio/out/socket-walkway.png` (900×621).

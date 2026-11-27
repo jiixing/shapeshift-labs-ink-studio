@@ -1,0 +1,14 @@
+the cli call the index.js in main
+this index.js act like a makefile
+   const files = ()
+    =>  array of files
+
+
+    the kit/ files add a bunch of stuff with no ecample bceaudse
+
+    the guy has other proejct using it
+
+    so some prodedural function theres is no test
+
+
+    so our approach is just use the one in gallery first and ask it to collect the .ts file needed and compile is uisng vite?
